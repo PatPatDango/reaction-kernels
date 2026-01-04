@@ -1,1 +1,110 @@
-# reaction-kernels
+# Reaction Kernels Lab (Graph Theory)
+
+This repository contains the setup and helper code for the **Reaction Kernels Lab**.
+The goal of the project is to represent **chemical reactions as graphs** and apply
+**graph kernel methods** for **reaction classification** using machine learning.
+
+This repository is structured for clarity and reproducibility and follows best
+practices for Python-based research projects.
+
+---
+
+## Project Structure
+reaction-kernels/
+├── data/          # datasets (ignored by git, local only)
+├── scripts/       # provided helper scripts (e.g. svm_dummy, chem_graph_handling)
+├── src/           # own implementations (later work packages)
+├── notebooks/     # experiments and analysis
+├── .gitignore
+└── README.md
+
+---
+
+## Setup (WP0)
+
+### Python Version
+- **Python >= 3.11** is required (mandatory for `synkit`)
+
+### Virtual Environment
+bash
+
+python3.11 -m venv .venv
+
+source .venv/bin/activate
+
+## Required Libraries
+python -m pip install synkit networkx scikit-learn pandas numpy matplotlib
+
+## Dataset Handling
+	•	Datasets are stored locally in the data/ folder
+	•	Datasets are not tracked by git
+	•	Only code and notebooks are uploaded to GitHub
+
+## Definitions (from the project description)
+### Graph
+A graph ( G = (V, E) ) consists of:
+	•	a set of vertices (nodes) ( V )
+	•	a set of edges ( E \subseteq V \times V )
+
+In this project, graphs are used to represent molecules and chemical reactions.
+
+### Kernel
+A kernel function ( k(x, y) ) computes a similarity measure between two objects.
+In this lab, kernels measure similarity between graphs.
+
+### Graph Kernel
+A graph kernel is a kernel function defined on graphs.
+It allows graphs to be used with standard machine learning algorithms such as
+Support Vector Machines (SVMs).
+
+### Weisfeiler–Lehman (WL) Algorithm
+The Weisfeiler–Lehman algorithm is an iterative procedure that:
+	1.	Assigns initial labels to nodes
+	2.	Repeatedly updates each node label based on its neighbors
+	3.	Produces a sequence of relabeled graphs ( G_0, G_1, …, G_h )
+
+These relabeled graphs are used to extract increasingly expressive features.
+
+### Weisfeiler–Lehman Graph Kernel
+The WL graph kernel computes similarity between two graphs by:
+	•	applying a base graph kernel at each WL iteration
+	•	summing the similarities over all iterations
+
+Formally:
+[
+k_{WL}^{(h)}(G, H) = \sum_{i=0}^{h} k(G_i, H_i)
+]
+
+### Base Kernels
+The project uses different base kernels, including:
+	•	Vertex (Subtree) Kernel
+Counts matching node labels between two graphs.
+	•	Edge Kernel
+Counts matching labeled edges (including endpoint labels).
+	•	Shortest-Path Kernel
+Counts matching shortest paths between pairs of nodes.
+
+### Chemical Reaction Representation
+#### Imaginary Transition State (ITS)
+	•	Represents a reaction as a single graph
+	•	Requires atom-to-atom mapping
+	•	Bond changes are encoded directly in edge labels
+
+#### Differential Reaction Fingerprint (DRF)
+	•	Does not require atom mapping
+	•	Reaction features are computed separately for reactants and products
+	•	The final representation is the symmetric difference of these features
+
+### Support Vector Machine (SVM)
+An SVM is a supervised learning model that:
+	•	uses a kernel function to operate in high-dimensional feature space
+	•	is used in this project to classify chemical reactions
+
+## Helper Scripts
+	•	chem_graph_handling.py
+Utilities for converting reactions and molecules into graph representations.
+	•	svm_dummy.py
+Minimal example showing how graph kernels can be used with an SVM.
+
+## Notes
+This repository covers WP0 (setup and familiarization).
