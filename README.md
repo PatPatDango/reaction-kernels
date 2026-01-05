@@ -107,7 +107,6 @@ Utilities for converting reactions and molecules into graph representations.
 Minimal example showing how graph kernels can be used with an SVM.
 
 ---
-
 ## Work Package 1: Data Preparation and Graph Visualization
 
 In Work Package 1, the cleaned reaction dataset was loaded and prepared for further analysis.
