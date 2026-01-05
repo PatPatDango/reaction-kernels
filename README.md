@@ -106,5 +106,29 @@ Utilities for converting reactions and molecules into graph representations.
 	•	svm_dummy.py
 Minimal example showing how graph kernels can be used with an SVM.
 
+---
+
+## Work Package 1: Data Preparation and Graph Visualization
+
+In Work Package 1, the cleaned reaction dataset was loaded and prepared for further analysis.
+The dataset was split into small, class-balanced subsets to enable efficient experimentation
+and manual inspection. Each subset contains three reaction classes with twenty reactions per
+class, following the project guidelines.
+
+To ensure the correctness of the reaction representations, several visualization utilities
+were implemented. Chemical reactions were represented using three complementary graph views:
+reactant graphs (educts), product graphs, and the Imaginary Transition State (ITS) graph.
+Reactant and product graphs show the molecular structures before and after the reaction,
+respectively, while the ITS graph combines both sides and explicitly encodes bond changes
+occurring during the reaction.
+
+These visualizations were used as manual sanity checks to verify that reactions were correctly
+parsed and converted into graph representations. By inspecting selected examples from each
+subset, it was confirmed that atom labels, bond types, and reaction changes were represented
+consistently. This step ensures that the subsequent feature extraction and kernel-based
+methods operate on meaningful and correct graph structures.
+
+---
+
 ## Notes
 This repository covers WP0 (setup and familiarization).
