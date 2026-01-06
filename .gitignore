@@ -14,6 +14,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+praktikum_env/
 
 ########################################
 # Jupyter
@@ -56,6 +57,9 @@ dist/
 ########################################
 data/*
 !data/.gitkeep
+scripts/subsets_small/*
+scripts/subsets_big/*
+scripts/schneider50k_clean.tsv
 
 ########################################
 # Optional logs
