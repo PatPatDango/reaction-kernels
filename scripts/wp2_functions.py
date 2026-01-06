@@ -4,6 +4,7 @@ from typing import Any, Iterable, List, Tuple, Optional, Dict
 from collections import Counter
 import hashlib
 import networkx as nx
+import numpy as np
 
 
 # ------------------------------------------------------------
@@ -751,5 +752,436 @@ def plot_wl_drf_iterations_from_rsmi(
     for ax in fig.layout:
         if ax.startswith("xaxis") or ax.startswith("yaxis"):
             fig.layout[ax].update(showgrid=False, zeroline=False, showticklabels=False)
+
+    return fig
+
+#----- kleiner Plot test 
+def plot_wl_drf_feature_growth_from_rsmi(
+    rsmi: str,
+    *,
+    h: int = 2,
+    mode: str = "edge",  # "vertex" | "edge" | "sp"
+    include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
+    digest_size: int = 16,
+    title: Optional[str] = None,
+    show_cumulative: bool = True,
+) -> go.Figure:
+    """
+    Option 3 visualization:
+    Plot how DRF feature complexity grows across WL iterations i=0..h.
+
+    Metrics per iteration i:
+    - unique_i = number of unique DRF features (len(Counter))
+    - mass_i   = total DRF count (sum of Counter values)
+
+    If show_cumulative=True:
+    - cum_unique_i = #unique features in the union (sum) of DRF_0..DRF_i
+    - cum_mass_i   = total count in DRF_0..DRF_i
+    """
+    # compute DRF per iteration
+    per_iter, _total = drf_wl_features_per_iter_from_rsmi(
+        rsmi,
+        h=h,
+        mode=mode,
+        include_edge_labels_in_sp=include_edge_labels_in_sp,
+        hash_node_labels=hash_node_labels,
+        hash_features=hash_features,
+        digest_size=digest_size,
+    )
+
+    iters = list(range(h + 1))
+    unique_per = [len(c) for c in per_iter]
+    mass_per = [sum(c.values()) for c in per_iter]
+
+    # cumulative stats
+    cum_unique = []
+    cum_mass = []
+    if show_cumulative:
+        acc = Counter()
+        for c in per_iter:
+            acc += c
+            cum_unique.append(len(acc))
+            cum_mass.append(sum(acc.values()))
+
+    fig = go.Figure()
+
+    # Per-iteration lines
+    fig.add_trace(go.Scatter(
+        x=iters, y=unique_per,
+        mode="lines+markers",
+        name="unique DRF features (per iter)"
+    ))
+    fig.add_trace(go.Scatter(
+        x=iters, y=mass_per,
+        mode="lines+markers",
+        name="total DRF count (per iter)"
+    ))
+
+    # Cumulative lines (optional)
+    if show_cumulative:
+        fig.add_trace(go.Scatter(
+            x=iters, y=cum_unique,
+            mode="lines+markers",
+            name="unique DRF features (cumulative)",
+            line=dict(dash="dash")
+        ))
+        fig.add_trace(go.Scatter(
+            x=iters, y=cum_mass,
+            mode="lines+markers",
+            name="total DRF count (cumulative)",
+            line=dict(dash="dash")
+        ))
+
+    fig.update_layout(
+        title=title or f"WL-DRF feature growth (mode={mode}, h={h})",
+        xaxis_title="WL iteration i",
+        yaxis_title="count",
+        margin=dict(l=30, r=30, t=50, b=30),
+        showlegend=True,
+    )
+
+    return fig
+
+
+# ====================================================================
+# Visualisierung der WL-Iterationen (ITS-basiert)
+# ====================================================================
+
+def its_wl_feature_sets_per_iter_from_graph(
+    its_graph: nx.Graph,
+    *,
+    h: int = 2,
+    mode: str = "edge",  # "vertex" | "edge" | "sp"
+    include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
+    digest_size: int = 16,
+) -> Tuple[List[Counter[str]], Counter[str]]:
+    """
+    Computes WL-enhanced feature representations for a single ITS graph.
+
+    Returns:
+      - per_iter: list of Counters (features -> counts) for i=0..h
+      - total:    Counter = sum over all iterations (Multiset-union style via addition)
+
+    If you need a true *set union* S_G, use: set(total.keys()).
+    """
+    # WL node-labels per iteration (dict[node] -> labelhash)
+    labels_seq = wl_label_sequence(its_graph, h, hash_node_labels=hash_node_labels, digest_size=digest_size)
+
+    per_iter: List[Counter[str]] = []
+    total = Counter()
+
+    for i in range(h + 1):
+        L = labels_seq[i]
+
+        # Apply Phi on the relabeled graph for this iteration
+        if mode == "vertex":
+            feats = _phi_vertex_from_labels(
+                its_graph, L,
+                hash_features=hash_features,
+                digest_size=digest_size
+            )
+        elif mode == "edge":
+            feats = _phi_edge_from_labels(
+                its_graph, L,
+                canonicalize=True,
+                hash_features=hash_features,
+                digest_size=digest_size
+            )
+        elif mode in ("sp", "shortest_path", "shortest-path"):
+            feats = _phi_sp_from_labels(
+                its_graph, L,
+                include_edge_labels=include_edge_labels_in_sp,
+                hash_features=hash_features,
+                digest_size=digest_size
+            )
+        else:
+            raise ValueError("mode must be 'vertex', 'edge', or 'sp'")
+
+        # feats is a list[str] (can contain duplicates) -> Counter
+        c = Counter(feats)
+        per_iter.append(c)
+        total += c
+
+    return per_iter, total
+
+
+def its_wl_feature_sets_per_iter_from_rsmi(
+    rsmi: str,
+    *,
+    h: int = 2,
+    mode: str = "edge",
+    include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
+    digest_size: int = 16,
+) -> Tuple[List[Counter[str]], Counter[str]]:
+    """
+    Convenience wrapper: build ITS from reaction SMILES and compute WL feature sets.
+    """
+    from synkit.IO import rsmi_to_its
+    its = rsmi_to_its(rsmi)
+    return its_wl_feature_sets_per_iter_from_graph(
+        its,
+        h=h,
+        mode=mode,
+        include_edge_labels_in_sp=include_edge_labels_in_sp,
+        hash_node_labels=hash_node_labels,
+        hash_features=hash_features,
+        digest_size=digest_size,
+    )
+
+
+def its_final_hashset_SG_from_rsmi(
+    rsmi: str,
+    *,
+    h: int = 2,
+    mode: str = "edge",
+    include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
+    digest_size: int = 16,
+) -> set[str]:
+    """
+    Returns the final hashset S_G = union of feature sets over all WL generations.
+    (Set of feature hashes, no counts.)
+    """
+    per_iter, total = its_wl_feature_sets_per_iter_from_rsmi(
+        rsmi,
+        h=h,
+        mode=mode,
+        include_edge_labels_in_sp=include_edge_labels_in_sp,
+        hash_node_labels=hash_node_labels,
+        hash_features=hash_features,
+        digest_size=digest_size,
+    )
+    return set(total.keys())
+
+
+def plot_its_wl_feature_growth_from_rsmi(
+    rsmi: str,
+    *,
+    h: int = 3,
+    mode: str = "edge",  # "vertex" | "edge" | "sp"
+    include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
+    digest_size: int = 16,
+    show_cumulative: bool = True,
+    title: Optional[str] = None,
+) -> go.Figure:
+    """
+    Feature growth across WL iterations for ITS.
+
+    Per iteration i:
+      - unique_i = number of unique ITS-WL features in iteration i
+      - mass_i   = total feature count (duplicates included) in iteration i
+
+    If show_cumulative=True:
+      - cum_unique_i = number of unique features across iterations 0..i (union size)
+      - cum_mass_i   = total feature count across iterations 0..i
+    """
+
+    per_iter, total = its_wl_feature_sets_per_iter_from_rsmi(
+        rsmi,
+        h=h,
+        mode=mode,
+        include_edge_labels_in_sp=include_edge_labels_in_sp,
+        hash_node_labels=hash_node_labels,
+        hash_features=hash_features,
+        digest_size=digest_size,
+    )
+
+    iters = list(range(h + 1))
+    unique_per = [len(c) for c in per_iter]
+    mass_per = [sum(c.values()) for c in per_iter]
+
+    cum_unique, cum_mass = [], []
+    if show_cumulative:
+        acc = Counter()
+        for c in per_iter:
+            acc += c
+            cum_unique.append(len(acc))          # union size (unique)
+            cum_mass.append(sum(acc.values()))   # total count
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=iters, y=unique_per,
+        mode="lines+markers",
+        name="unique ITS-WL features (per iter)",
+    ))
+    fig.add_trace(go.Scatter(
+        x=iters, y=mass_per,
+        mode="lines+markers",
+        name="total ITS-WL count (per iter)",
+    ))
+
+    if show_cumulative:
+        fig.add_trace(go.Scatter(
+            x=iters, y=cum_unique,
+            mode="lines+markers",
+            name="unique ITS-WL features (cumulative)",
+            line=dict(dash="dash"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=iters, y=cum_mass,
+            mode="lines+markers",
+            name="total ITS-WL count (cumulative)",
+            line=dict(dash="dash"),
+        ))
+
+    fig.update_layout(
+        title=title or f"ITS–WL Feature Growth Across Iterations (mode={mode}, h={h})",
+        xaxis_title="WL iteration i",
+        yaxis_title="count",
+        margin=dict(l=30, r=30, t=50, b=30),
+        showlegend=True,
+    )
+
+    return fig
+
+def plot_its_wl_feature_growth_subset(
+    df,
+    *,
+    rxn_col: str = "clean_rxn",
+    h: int = 3,
+    mode: str = "edge",  # "vertex" | "edge" | "sp"
+    include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
+    digest_size: int = 16,
+    title: Optional[str] = None,
+) -> go.Figure:
+    """
+    Plots mean ITS–WL feature growth across WL iterations, averaged over a dataset subset.
+    """
+    from wp2_functions import its_wl_feature_sets_per_iter_from_rsmi
+
+    per_iter_counts = [[] for _ in range(h + 1)]
+
+    for rsmi in df[rxn_col]:
+        per_iter, _ = its_wl_feature_sets_per_iter_from_rsmi(
+            rsmi,
+            h=h,
+            mode=mode,
+            include_edge_labels_in_sp=include_edge_labels_in_sp,
+            hash_node_labels=hash_node_labels,
+            hash_features=hash_features,
+            digest_size=digest_size,
+        )
+        for i, c in enumerate(per_iter):
+            per_iter_counts[i].append(len(c))
+
+    means = [np.mean(v) for v in per_iter_counts]
+    stds = [np.std(v) for v in per_iter_counts]
+    iters = list(range(h + 1))
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=iters,
+        y=means,
+        mode="lines+markers",
+        name="mean #ITS–WL features",
+        error_y=dict(type="data", array=stds, visible=True),
+    ))
+
+    fig.update_layout(
+        title=title or f"ITS–WL Feature Growth Across Iterations (subset mean, h={h})",
+        xaxis_title="WL iteration i",
+        yaxis_title="mean number of features",
+        margin=dict(l=40, r=40, t=50, b=40),
+        showlegend=True,
+    )
+
+    return fig
+
+def plot_feature_growth_subset_its_vs_drf(
+    df,
+    *,
+    rxn_col: str = "clean_rxn",
+    h: int = 3,
+    mode: str = "edge",  # use same mode for fair comparison
+    include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
+    digest_size: int = 16,
+    title: Optional[str] = None,
+    show_errorbars: bool = True,
+) -> go.Figure:
+    """
+    Compare feature growth across WL iterations for ITS–WL vs DRF–WL in ONE plot,
+    averaged over all reactions in df.
+    """
+    from wp2_functions import (
+        its_wl_feature_sets_per_iter_from_rsmi,
+        drf_wl_features_per_iter_from_rsmi,
+    )
+
+    # collect per-iteration counts for each reaction
+    its_counts = [[] for _ in range(h + 1)]
+    drf_counts = [[] for _ in range(h + 1)]
+
+    for rsmi in df[rxn_col].astype(str):
+        # ITS–WL: per_iter is list[Counter]
+        its_per_iter, _ = its_wl_feature_sets_per_iter_from_rsmi(
+            rsmi,
+            h=h,
+            mode=mode,
+            include_edge_labels_in_sp=include_edge_labels_in_sp,
+            hash_node_labels=hash_node_labels,
+            hash_features=hash_features,
+            digest_size=digest_size,
+        )
+        for i, c in enumerate(its_per_iter):
+            its_counts[i].append(len(c))  # unique features in iteration i
+
+        # DRF–WL: per_iter is list[Counter]
+        drf_per_iter, _total = drf_wl_features_per_iter_from_rsmi(
+            rsmi,
+            h=h,
+            mode=mode,
+            include_edge_labels_in_sp=include_edge_labels_in_sp,
+            hash_node_labels=hash_node_labels,
+            hash_features=hash_features,
+            digest_size=digest_size,
+        )
+        for i, c in enumerate(drf_per_iter):
+            drf_counts[i].append(len(c))  # unique DRF features in iteration i
+
+    iters = list(range(h + 1))
+
+    its_mean = [float(np.mean(v)) for v in its_counts]
+    its_std  = [float(np.std(v))  for v in its_counts]
+    drf_mean = [float(np.mean(v)) for v in drf_counts]
+    drf_std  = [float(np.std(v))  for v in drf_counts]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=iters, y=its_mean,
+        mode="lines+markers",
+        name="ITS–WL (mean unique features / iter)",
+        error_y=dict(type="data", array=its_std, visible=show_errorbars),
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=iters, y=drf_mean,
+        mode="lines+markers",
+        name="DRF–WL (mean unique features / iter)",
+        error_y=dict(type="data", array=drf_std, visible=show_errorbars),
+    ))
+
+    fig.update_layout(
+        title=title or f"ITS–WL vs DRF–WL Feature Growth (subset mean, mode={mode}, h={h})",
+        xaxis_title="WL iteration i",
+        yaxis_title="mean number of unique features",
+        margin=dict(l=40, r=40, t=60, b=40),
+        showlegend=True,
+    )
 
     return fig

@@ -25,6 +25,7 @@ import networkx as nx
 import plotly.graph_objects as go
 import pandas as pd
 from chem_graph_handling import visualize_graph
+from plotly.subplots import make_subplots
 
 # synkit turns a reaction SMILES string into NetworkX graphs
 from synkit.IO import rsmi_to_its, rsmi_to_graph
@@ -430,7 +431,7 @@ def inspect_random(
 from typing import Any, Dict, List, Tuple, Optional, Iterable
 from collections import Counter
 
-import networkx as nx
+
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -742,4 +743,94 @@ def plot_drf_from_counters_rsmi(
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         yaxis2=dict(showgrid=False, zeroline=False, showticklabels=False),
     )
+    return fig
+
+# ============================================================
+# Visualisation for WL iterations on ITS
+# ============================================================
+
+def visualize_its_wl_iterations(
+    rsmi: str,
+    *,
+    h: int = 3,
+    seed: int = 42,
+    title: str | None = None,
+):
+    """
+    Visualize WL iterations on the ITS graph.
+    Same graph, different node colors per WL iteration.
+    """
+    from wp2_functions import wl_label_sequence
+
+    G = rsmi_to_its(rsmi)
+    labels_seq = wl_label_sequence(G, h)
+
+    pos = nx.spring_layout(G, seed=seed)
+
+    fig = make_subplots(
+        rows=1,
+        cols=h + 1,
+        subplot_titles=[f"WL i={i}" for i in range(h + 1)],
+        horizontal_spacing=0.05,
+    )
+
+    for i in range(h + 1):
+        labels = labels_seq[i]
+
+        # map WL labels to colors
+        unique_labels = list(set(labels.values()))
+        color_map = {lab: idx for idx, lab in enumerate(unique_labels)}
+        colors = [color_map[labels[n]] for n in G.nodes()]
+
+        # edges
+        xe, ye = [], []
+        for u, v in G.edges():
+            x0, y0 = pos[u]
+            x1, y1 = pos[v]
+            xe += [x0, x1, None]
+            ye += [y0, y1, None]
+
+        fig.add_trace(
+            go.Scatter(
+                x=xe, y=ye,
+                mode="lines",
+                line=dict(color="#aaa", width=2),
+                hoverinfo="none",
+                showlegend=False,
+            ),
+            row=1, col=i + 1
+        )
+
+        # nodes
+        xn, yn = [], []
+        for n in G.nodes():
+            x, y = pos[n]
+            xn.append(x)
+            yn.append(y)
+
+        fig.add_trace(
+            go.Scatter(
+                x=xn, y=yn,
+                mode="markers",
+                marker=dict(
+                    size=18,
+                    color=colors,
+                    colorscale="Viridis",
+                    showscale=False,
+                ),
+                hoverinfo="none",
+                showlegend=False,
+            ),
+            row=1, col=i + 1
+        )
+
+    fig.update_layout(
+        title=title or f"WL iterations on ITS graph (h={h})",
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+
+    for ax in fig.layout:
+        if ax.startswith("xaxis") or ax.startswith("yaxis"):
+            fig.layout[ax].update(showgrid=False, zeroline=False, showticklabels=False)
+
     return fig
