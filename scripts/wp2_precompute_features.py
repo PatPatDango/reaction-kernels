@@ -12,6 +12,7 @@ import pickle
 
 import pandas as pd
 from collections import Counter
+from wp2_functions import its_wl_feature_sets_per_iter_from_rsmi
 
 # --- import your feature functions ---
 # adjust the import path/module name to your project setup
@@ -196,38 +197,89 @@ def precompute_and_save(
     save_pickle(feats, out_path)
     return Path(out_path)
 
-def precompute_all_subsets_in_dir(
+def precompute_all_subsets_in_dir_drf_wl(
     subsets_dir: str | Path,
     out_dir: str | Path,
     *,
+    rxn_col: str = "clean_rxn",
     pattern: str = "*.tsv",
-    drf_mode: str = "edge",
-    wl_h: int = 3,
-    wl_mode: str = "edge",
+    h: int = 3,
+    mode: str = "edge",
     include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
     digest_size: int = 16,
 ) -> None:
+    """
+    Pre-compute DRF–WL feature representations for all subset TSV files.
+
+    For each reaction:
+      - build educt and product graphs
+      - apply WL (0..h)
+      - compute DRF per iteration
+      - take union over iterations
+      - store as Counter(feature_hash -> count)
+
+    Results are saved as .pkl files, one per subset.
+    """
     subsets_dir = Path(subsets_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     files = sorted(subsets_dir.glob(pattern))
     if not files:
-        raise FileNotFoundError(f"No TSV files found in {subsets_dir} with pattern {pattern}")
+        raise FileNotFoundError(f"No TSV files found in {subsets_dir}")
 
     for f in files:
-        out_path = out_dir / (f.stem + f".reaction_features_drf_wl_h{wl_h}.pkl")
-        print(f"[+] Precomputing {f.name} -> {out_path.name}")
-        precompute_and_save(
-            f,
-            out_path,
-            drf_mode=drf_mode,
-            wl_h=wl_h,
-            wl_mode=wl_mode,
-            include_edge_labels_in_sp=include_edge_labels_in_sp,
-            digest_size=digest_size,
-        )
-    print("[✓] Done.")
+        print(f"[+] DRF–WL precompute for {f.name}")
+        df = pd.read_csv(f, sep="\t")
+
+        if rxn_col not in df.columns:
+            raise KeyError(f"Column '{rxn_col}' not found in {f.name}")
+
+        features = []
+        errors = []
+
+        for idx, rsmi in enumerate(df[rxn_col].astype(str)):
+            try:
+                _, total = drf_wl_features_from_rsmi(
+                    rsmi,
+                    h=h,
+                    mode=mode,
+                    include_edge_labels_in_sp=include_edge_labels_in_sp,
+                    hash_node_labels=hash_node_labels,
+                    hash_features=hash_features,
+                    digest_size=digest_size,
+                )
+                features.append(total)
+            except Exception as e:
+                errors.append({"index": idx, "rsmi": rsmi, "error": repr(e)})
+                features.append(Counter())
+
+        out = {
+            "meta": {
+                "type": "DRF–WL",
+                "rxn_col": rxn_col,
+                "h": h,
+                "mode": mode,
+                "hash_node_labels": hash_node_labels,
+                "hash_features": hash_features,
+                "digest_size": digest_size,
+                "n_rows": len(df),
+                "n_errors": len(errors),
+            },
+            "rsmi": df[rxn_col].tolist(),
+            "drf_wl": features,
+            "errors": errors,
+        }
+
+        out_path = out_dir / f"{f.stem}.reaction_features_drf_wl_h{h}.pkl"
+        with open(out_path, "wb") as fh:
+            pickle.dump(out, fh)
+
+        print(f"    → saved to {out_path.name}")
+
+    print("[✓] DRF–WL precompute finished.")
 
 # ================================
 # Example usage in your notebook
@@ -251,3 +303,86 @@ def precompute_all_subsets_in_dir(
 #     wl_h=3,
 #     wl_mode="edge",
 # )
+
+def precompute_all_subsets_in_dir_its_wl(
+    subsets_dir: str | Path,
+    out_dir: str | Path,
+    *,
+    rxn_col: str = "clean_rxn",
+    pattern: str = "*.tsv",
+    h: int = 3,
+    mode: str = "edge",  # "vertex" | "edge" | "sp"
+    include_edge_labels_in_sp: bool = True,
+    hash_node_labels: bool = True,
+    hash_features: bool = True,
+    digest_size: int = 16,
+) -> None:
+    """
+    Pre-compute ITS–WL feature representations for all subset TSV files.
+
+    For each reaction:
+      - build ITS graph
+      - compute WL features for iterations 0..h
+      - take the union over all iterations
+      - store as Counter(feature_hash -> count)
+
+    Results are saved as .pkl files, one per subset.
+    """
+    subsets_dir = Path(subsets_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(subsets_dir.glob(pattern))
+    if not files:
+        raise FileNotFoundError(f"No TSV files found in {subsets_dir}")
+
+    for f in files:
+        print(f"[+] ITS–WL precompute for {f.name}")
+        df = pd.read_csv(f, sep="\t")
+
+        if rxn_col not in df.columns:
+            raise KeyError(f"Column '{rxn_col}' not found in {f.name}")
+
+        features = []
+        errors = []
+
+        for idx, rsmi in enumerate(df[rxn_col].astype(str)):
+            try:
+                _, total = its_wl_feature_sets_per_iter_from_rsmi(
+                    rsmi,
+                    h=h,
+                    mode=mode,
+                    include_edge_labels_in_sp=include_edge_labels_in_sp,
+                    hash_node_labels=hash_node_labels,
+                    hash_features=hash_features,
+                    digest_size=digest_size,
+                )
+                features.append(total)
+            except Exception as e:
+                errors.append({"index": idx, "rsmi": rsmi, "error": repr(e)})
+                features.append(Counter())
+
+        out = {
+            "meta": {
+                "type": "ITS–WL",
+                "rxn_col": rxn_col,
+                "h": h,
+                "mode": mode,
+                "hash_node_labels": hash_node_labels,
+                "hash_features": hash_features,
+                "digest_size": digest_size,
+                "n_rows": len(df),
+                "n_errors": len(errors),
+            },
+            "rsmi": df[rxn_col].tolist(),
+            "its_wl": features,
+            "errors": errors,
+        }
+
+        out_path = out_dir / f"{f.stem}.reaction_features_its_wl_h{h}.pkl"
+        with open(out_path, "wb") as fh:
+            pickle.dump(out, fh)
+
+        print(f"    → saved to {out_path.name}")
+
+    print("[✓] ITS–WL precompute finished.")
