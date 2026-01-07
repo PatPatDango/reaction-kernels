@@ -202,6 +202,7 @@ def precompute_all_subsets_in_dir_drf_wl(
     out_dir: str | Path,
     *,
     rxn_col: str = "clean_rxn",
+    class_col: str = "rxn_class",
     pattern: str = "*.tsv",
     h: int = 3,
     mode: str = "edge",
@@ -236,6 +237,9 @@ def precompute_all_subsets_in_dir_drf_wl(
 
         if rxn_col not in df.columns:
             raise KeyError(f"Column '{rxn_col}' not found in {f.name}")
+        
+        if class_col not in df.columns:
+            raise KeyError(f"Column '{class_col}' not found in {f.name}")
 
         features = []
         errors = []
@@ -269,11 +273,12 @@ def precompute_all_subsets_in_dir_drf_wl(
                 "n_errors": len(errors),
             },
             "rsmi": df[rxn_col].tolist(),
+            "classes": df[class_col].tolist() if class_col in df.columns else None,
             "drf_wl": features,
             "errors": errors,
         }
 
-        out_path = out_dir / f"{f.stem}.reaction_features_drf_wl_h{h}.pkl"
+        out_path = out_dir / f"{f.stem}.reaction_features_drf_wl_h{h}_{mode}.pkl"
         with open(out_path, "wb") as fh:
             pickle.dump(out, fh)
 
@@ -309,6 +314,7 @@ def precompute_all_subsets_in_dir_its_wl(
     out_dir: str | Path,
     *,
     rxn_col: str = "clean_rxn",
+    class_col: str = "rxn_class",
     pattern: str = "*.tsv",
     h: int = 3,
     mode: str = "edge",  # "vertex" | "edge" | "sp"
@@ -342,6 +348,9 @@ def precompute_all_subsets_in_dir_its_wl(
 
         if rxn_col not in df.columns:
             raise KeyError(f"Column '{rxn_col}' not found in {f.name}")
+        
+        if class_col not in df.columns:
+            raise KeyError(f"Column '{class_col}' not found in {f.name}")
 
         features = []
         errors = []
@@ -375,11 +384,12 @@ def precompute_all_subsets_in_dir_its_wl(
                 "n_errors": len(errors),
             },
             "rsmi": df[rxn_col].tolist(),
+            "classes": df[class_col].tolist() if class_col in df.columns else None,
             "its_wl": features,
             "errors": errors,
         }
 
-        out_path = out_dir / f"{f.stem}.reaction_features_its_wl_h{h}.pkl"
+        out_path = out_dir / f"{f.stem}.reaction_features_its_wl_h{h}_{mode}.pkl"
         with open(out_path, "wb") as fh:
             pickle.dump(out, fh)
 
