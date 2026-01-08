@@ -128,6 +128,15 @@ consistently. This step ensures that the subsequent feature extraction and kerne
 methods operate on meaningful and correct graph structures.
 
 ---
+## Work Package 2: Feature Extraction with WL and DRF
+
+In Work Package 2, reaction graphs were transformed into structured feature representations using the Weisfeiler–Lehman (WL) framework. Vertex, edge, and shortest-path features were extracted across multiple WL iterations to capture increasingly rich structural context.
+
+Two complementary reaction representations were implemented. For ITS–WL, features were computed directly on the Imaginary Transition State graph and aggregated over all WL iterations. For DRF–WL, features were computed separately for reactant and product graphs and combined using a symmetric difference, ensuring that only reaction-specific changes were retained.
+
+All feature labels were hashed to enable efficient comparison, and the union over all WL iterations formed the final reaction fingerprint. The resulting feature representations were pre-computed and stored for efficient kernel-based classification in subsequent work packages.
+
+---
 
 ## Notes
 This repository covers WP0 (setup and familiarization).
