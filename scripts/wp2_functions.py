@@ -18,10 +18,18 @@ EDGE_LABEL_KEYS = ("label", "bond", "type", "order", "change")
 
 def get_node_label(G: nx.Graph, n: Any) -> str:
     d = G.nodes[n]
-    for k in NODE_LABEL_KEYS:
-        if k in d and d[k] is not None:
-            return str(d[k])
-    return str(n)  # Fallback auf Node-ID
+
+    # element ist bei dir vorhanden
+    element = str(d.get("element", n))
+
+    # wichtige chemische Infos (ändern sich oft bei Reaktionen!)
+    charge = int(d.get("charge", 0)) if d.get("charge", 0) is not None else 0
+    hcount = int(d.get("hcount", 0)) if d.get("hcount", 0) is not None else 0
+    aromatic = "ar" if d.get("aromatic", False) else "al"
+    
+    # Kompaktes, stabiles Label:
+    # Beispiel: N|c0|h1|al
+    return f"{element}|c{charge}|h{hcount}|{aromatic}"
 
 def get_edge_label(G: nx.Graph, u: Any, v: Any) -> str:
     d = G.edges[u, v]
@@ -196,7 +204,8 @@ def drf_features_from_rsmi(
     raw_labels: bool = False,
 ) -> Counter[str]:
     from synkit.IO import rsmi_to_graph
-    ed, pr = rsmi_to_graph(rsmi)
+    out = rsmi_to_graph(rsmi)
+    ed, pr = out[0], out[1]
     return drf_features_from_graphs(
         ed, pr,
         mode=mode,
@@ -382,7 +391,9 @@ def drf_wl_features_from_rsmi(
     digest_size: int = 16,
 ) -> Counter[str]:
     from synkit.IO import rsmi_to_graph
-    ed, pr = rsmi_to_graph(rsmi)
+    out = rsmi_to_graph(rsmi)
+    ed = out[0]
+    pr = out[1]
     return drf_wl_features_from_graphs(
         ed, pr,
         h=h,
@@ -485,7 +496,9 @@ def drf_wl_features_per_iter_from_rsmi(
     digest_size: int = 16,
 ) -> Tuple[List[Counter[str]], Counter[str]]:
     from synkit.IO import rsmi_to_graph
-    ed, pr = rsmi_to_graph(rsmi)
+    out = rsmi_to_graph(rsmi)
+    ed = out[0]
+    pr = out[1]
     return drf_wl_features_per_iter_from_graphs(
         ed, pr,
         h=h,
@@ -672,7 +685,8 @@ def plot_wl_drf_iterations_from_rsmi(
     - width steuert die Gesamtbreite; für mehr Platz je Spalte erhöhen.
     """
     from synkit.IO import rsmi_to_graph
-    ed, pr = rsmi_to_graph(rsmi)
+    out = rsmi_to_graph(rsmi)
+    ed, pr = out[0], out[1]
 
     # Positionen konstant pro Graph (für alle Iterationen)
     pos_ed = nx.spring_layout(ed, seed=seed)
