@@ -153,8 +153,10 @@ Separating data loading, feature extraction, kernel computation, and classificat
 
 ### Further Observations
 Additional insights gained during extended experimentation and classification experiments will be documented in this section as part of future work.
+
 ---
 
 ## Notes
 This repository covers WP0 (setup and familiarization).
+
 ---
