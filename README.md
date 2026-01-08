@@ -137,6 +137,24 @@ Two complementary reaction representations were implemented. For ITS–WL, featu
 All feature labels were hashed to enable efficient comparison, and the union over all WL iterations formed the final reaction fingerprint. The resulting feature representations were pre-computed and stored for efficient kernel-based classification in subsequent work packages.
 
 ---
+## Lessons Learned
+
+### Feature Design and Representation
+The quality of graph-based kernels strongly depends on the chosen feature representation. Using only atom types as node labels was insufficient, as many reactions differ mainly in hydrogen count or charge. Extending node labels with chemically relevant attributes such as hydrogen count, charge, and aromaticity was essential to capture meaningful reaction changes and to avoid empty DRF feature sets.
+
+Reaction-based representations like DRF are inherently sparse, since they focus exclusively on structural changes between educt and product graphs. As a result, many reaction pairs have zero similarity, which is expected and well-suited for kernel-based methods.
+
+### Kernel Construction and Modularity
+The Weisfeiler–Lehman procedure significantly increases the expressiveness of features, but also their specificity. Higher WL iterations improve discrimination while reducing overlap between reactions, making the choice of WL depth an important design decision.
+
+Storing features as multisets allows the kernel definition to explicitly incorporate feature frequencies. In this project, a multiset kernel was used to reflect the importance of repeated structural patterns.
+
+Separating data loading, feature extraction, kernel computation, and classification into independent modules greatly simplified debugging and experimentation, and enabled systematic comparison of different kernel variants.
+
+### Further Observations
+Additional insights gained during experimentation and evaluation will be documented in this section.
+---
 
 ## Notes
 This repository covers WP0 (setup and familiarization).
+---
