@@ -140,19 +140,19 @@ All feature labels were hashed to enable efficient comparison, and the union ove
 ## Lessons Learned
 
 ### Feature Design and Representation
-The quality of graph-based kernels strongly depends on the chosen feature representation. Using only atom types as node labels was insufficient, as many reactions differ mainly in hydrogen count or charge. Extending node labels with chemically relevant attributes such as hydrogen count, charge, and aromaticity was essential to capture meaningful reaction changes and to avoid empty DRF feature sets.
+The performance of graph-based kernels strongly depends on the chosen feature representation. Using only atom types as node labels proved insufficient, as many reactions differ primarily in hydrogen count, charge, or aromaticity rather than in atom identity alone. Extending node labels with chemically meaningful attributes such as hydrogen count, charge, and aromaticity was therefore essential to capture relevant reaction changes and to avoid empty DRF feature representations.
 
-Reaction-based representations like DRF are inherently sparse, since they focus exclusively on structural changes between educt and product graphs. As a result, many reaction pairs have zero similarity, which is expected and well-suited for kernel-based methods.
+Reaction-based representations such as DRF are inherently sparse, as they deliberately discard static molecular structure and retain only features corresponding to bond changes. Consequently, many reaction pairs exhibit zero similarity, which is an expected and desirable property for reaction-centered kernel methods.
 
 ### Kernel Construction and Modularity
-The Weisfeiler–Lehman procedure significantly increases the expressiveness of features, but also their specificity. Higher WL iterations improve discrimination while reducing overlap between reactions, making the choice of WL depth an important design decision.
+The Weisfeiler–Lehman procedure substantially increases the expressiveness of graph features by incorporating local neighborhood information across iterations. While higher WL depths improve discriminative power, they also reduce feature overlap between reactions, making the choice of WL iteration depth a critical design parameter.
 
-Storing features as multisets allows the kernel definition to explicitly incorporate feature frequencies. In this project, a multiset kernel was used to reflect the importance of repeated structural patterns.
+Representing features as multisets rather than simple sets allows the kernel to account for feature multiplicities. In this project, a multiset intersection kernel was used to preserve the frequency of recurring structural patterns, which is particularly important for reactions involving repeated bond changes.
 
-Separating data loading, feature extraction, kernel computation, and classification into independent modules greatly simplified debugging and experimentation, and enabled systematic comparison of different kernel variants.
+Separating data loading, feature extraction, kernel computation, and classification into independent modules significantly simplified debugging and experimentation. This modular design enabled systematic comparison of different kernel variants and representations.
 
 ### Further Observations
-Additional insights gained during experimentation and evaluation will be documented in this section.
+Additional insights gained during extended experimentation and classification experiments will be documented in this section as part of future work.
 ---
 
 ## Notes
