@@ -16,6 +16,25 @@ from pathlib import Path
 NODE_LABEL_KEYS = ("label", "atom", "symbol", "element", "name")
 EDGE_LABEL_KEYS = ("label", "bond", "type", "order", "change")
 
+def rsmi_to_educt_product(rsmi: str) -> tuple[nx.Graph, nx.Graph]:
+    """
+    synkit.IO.rsmi_to_graph(rsmi) kann je nach Version/Config
+    2 oder 3+ Werte zurückgeben. Wir nehmen immer die ersten zwei
+    als (educt_graph, product_graph).
+    """
+    from synkit.IO import rsmi_to_graph
+
+    out = rsmi_to_graph(rsmi)
+
+    # Häufig: tuple/list mit (educt, product, ...) -> nimm nur die ersten 2
+    if isinstance(out, (tuple, list)):
+        if len(out) < 2:
+            raise ValueError(f"rsmi_to_graph returned too few outputs: len={len(out)}")
+        return out[0], out[1]
+
+    # Falls es doch ein einzelner Graph ist: dann ist das nicht DRF-kompatibel
+    raise TypeError(f"rsmi_to_graph returned {type(out)}, expected tuple/list with educt+product.")
+
 def get_node_label(G: nx.Graph, n: Any) -> str:
     d = G.nodes[n]
 
@@ -26,7 +45,7 @@ def get_node_label(G: nx.Graph, n: Any) -> str:
     charge = int(d.get("charge", 0)) if d.get("charge", 0) is not None else 0
     hcount = int(d.get("hcount", 0)) if d.get("hcount", 0) is not None else 0
     aromatic = "ar" if d.get("aromatic", False) else "al"
-    
+
     # Kompaktes, stabiles Label:
     # Beispiel: N|c0|h1|al
     return f"{element}|c{charge}|h{hcount}|{aromatic}"
@@ -204,8 +223,7 @@ def drf_features_from_rsmi(
     raw_labels: bool = False,
 ) -> Counter[str]:
     from synkit.IO import rsmi_to_graph
-    out = rsmi_to_graph(rsmi)
-    ed, pr = out[0], out[1]
+    ed, pr = rsmi_to_educt_product(rsmi)
     return drf_features_from_graphs(
         ed, pr,
         mode=mode,
@@ -391,9 +409,7 @@ def drf_wl_features_from_rsmi(
     digest_size: int = 16,
 ) -> Counter[str]:
     from synkit.IO import rsmi_to_graph
-    out = rsmi_to_graph(rsmi)
-    ed = out[0]
-    pr = out[1]
+    ed, pr = rsmi_to_educt_product(rsmi)
     return drf_wl_features_from_graphs(
         ed, pr,
         h=h,
@@ -685,8 +701,7 @@ def plot_wl_drf_iterations_from_rsmi(
     - width steuert die Gesamtbreite; für mehr Platz je Spalte erhöhen.
     """
     from synkit.IO import rsmi_to_graph
-    out = rsmi_to_graph(rsmi)
-    ed, pr = out[0], out[1]
+    ed, pr = rsmi_to_educt_product(rsmi)
 
     # Positionen konstant pro Graph (für alle Iterationen)
     pos_ed = nx.spring_layout(ed, seed=seed)

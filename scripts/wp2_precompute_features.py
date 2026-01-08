@@ -13,6 +13,7 @@ import pickle
 import pandas as pd
 from collections import Counter
 from wp2_functions import its_wl_feature_sets_per_iter_from_rsmi
+from wp2_functions import drf_wl_features_from_rsmi
 
 # --- import your feature functions ---
 # adjust the import path/module name to your project setup
@@ -217,8 +218,7 @@ def precompute_all_subsets_in_dir_drf_wl(
     For each reaction:
       - build educt and product graphs
       - apply WL (0..h)
-      - compute DRF per iteration
-      - take union over iterations
+      - compute DRF over WL features (union/sum over iterations inside the Counter)
       - store as Counter(feature_hash -> count)
 
     Results are saved as .pkl files, one per subset.
@@ -237,7 +237,7 @@ def precompute_all_subsets_in_dir_drf_wl(
 
         if rxn_col not in df.columns:
             raise KeyError(f"Column '{rxn_col}' not found in {f.name}")
-        
+
         if class_col not in df.columns:
             raise KeyError(f"Column '{class_col}' not found in {f.name}")
 
@@ -246,7 +246,8 @@ def precompute_all_subsets_in_dir_drf_wl(
 
         for idx, rsmi in enumerate(df[rxn_col].astype(str)):
             try:
-                _, total = drf_wl_features_from_rsmi(
+                # ✅ FIX: drf_wl_features_from_rsmi returns ONE Counter
+                total = drf_wl_features_from_rsmi(
                     rsmi,
                     h=h,
                     mode=mode,
@@ -256,6 +257,7 @@ def precompute_all_subsets_in_dir_drf_wl(
                     digest_size=digest_size,
                 )
                 features.append(total)
+
             except Exception as e:
                 errors.append({"index": idx, "rsmi": rsmi, "error": repr(e)})
                 features.append(Counter())
@@ -264,8 +266,10 @@ def precompute_all_subsets_in_dir_drf_wl(
             "meta": {
                 "type": "DRF–WL",
                 "rxn_col": rxn_col,
+                "class_col": class_col,
                 "h": h,
                 "mode": mode,
+                "include_edge_labels_in_sp": include_edge_labels_in_sp,
                 "hash_node_labels": hash_node_labels,
                 "hash_features": hash_features,
                 "digest_size": digest_size,
@@ -273,7 +277,7 @@ def precompute_all_subsets_in_dir_drf_wl(
                 "n_errors": len(errors),
             },
             "rsmi": df[rxn_col].tolist(),
-            "classes": df[class_col].tolist() if class_col in df.columns else None,
+            "classes": df[class_col].tolist(),
             "drf_wl": features,
             "errors": errors,
         }
@@ -282,10 +286,9 @@ def precompute_all_subsets_in_dir_drf_wl(
         with open(out_path, "wb") as fh:
             pickle.dump(out, fh)
 
-        print(f"    → saved to {out_path.name}")
+        print(f"    → saved to {out_path.name} | errors: {len(errors)}/{len(df)}")
 
     print("[✓] DRF–WL precompute finished.")
-
 # ================================
 # Example usage in your notebook
 # ================================
