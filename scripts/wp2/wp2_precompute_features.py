@@ -12,13 +12,13 @@ import pickle
 
 import pandas as pd
 from collections import Counter
-from wp2_functions import its_wl_feature_sets_per_iter_from_rsmi
-from wp2_functions import drf_wl_features_from_rsmi
+from .wp2_functions import its_wl_feature_sets_per_iter_from_rsmi
+from .wp2_functions import drf_wl_features_from_rsmi
 
 # --- import your feature functions ---
 # adjust the import path/module name to your project setup
 # (e.g., from src.wp2_functions import ...)
-from wp2_functions import (
+from .wp2_functions import (
     drf_features_from_rsmi,
     drf_wl_features_from_rsmi,
 )

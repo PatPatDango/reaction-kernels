@@ -1089,7 +1089,7 @@ def plot_its_wl_feature_growth_subset(
     """
     Plots mean ITS–WL feature growth across WL iterations, averaged over a dataset subset.
     """
-    from wp2_functions import its_wl_feature_sets_per_iter_from_rsmi
+    from scripts.wp2.wp2_functions import its_wl_feature_sets_per_iter_from_rsmi
 
     per_iter_counts = [[] for _ in range(h + 1)]
 
@@ -1147,7 +1147,7 @@ def plot_feature_growth_subset_its_vs_drf(
     Compare feature growth across WL iterations for ITS–WL vs DRF–WL in ONE plot,
     averaged over all reactions in df.
     """
-    from wp2_functions import (
+    from scripts.wp2.wp2_functions import (
         its_wl_feature_sets_per_iter_from_rsmi,
         drf_wl_features_per_iter_from_rsmi,
     )

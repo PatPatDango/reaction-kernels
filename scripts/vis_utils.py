@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional, Tuple, List
 import networkx as nx
 import plotly.graph_objects as go
 import pandas as pd
-from chem_graph_handling import visualize_graph
+from .wp0.chem_graph_handling import visualize_graph
 from plotly.subplots import make_subplots
 
 # synkit turns a reaction SMILES string into NetworkX graphs
@@ -437,7 +437,7 @@ from plotly.subplots import make_subplots
 
 # Wir importieren die gleichen Φ-Funktionen wie beim DRF
 try:
-    from wp2_functions import (
+    from scripts.wp2.wp2_functions import (
         get_node_label, get_edge_label,
         phi_vertex_list, phi_edge_list, phi_shortest_path_list,
     )
@@ -760,7 +760,7 @@ def visualize_its_wl_iterations(
     Visualize WL iterations on the ITS graph.
     Same graph, different node colors per WL iteration.
     """
-    from wp2_functions import wl_label_sequence
+    from scripts.wp2.wp2_functions import wl_label_sequence
 
     G = rsmi_to_its(rsmi)
     labels_seq = wl_label_sequence(G, h)
