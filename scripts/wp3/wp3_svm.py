@@ -36,6 +36,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from pathlib import Path
 import pickle
+from .wp3_loader import load_precomputed_features_select
 
 
 # ============================================================
@@ -413,3 +414,38 @@ def run_experiments(
         print(f"{representation:7s} | {mode:6s} | labels={len(set(yf)):2d} | n={len(yf):4d} | test={ts:.1f} | acc={res.acc:.3f}")
 
     return results
+
+# ============================================================
+# 9) SVM training from precomputed kernel features of the subsets on disk
+# ============================================================
+
+def train_svm_from_precomputed_dir(
+    *,
+    precomp_dir: str | Path,
+    feature_key: str,
+    subset_ids: list[int] | None = None,  # z.B. [1,2,3]
+    n: int = 600,
+    test_size: float = 0.2,
+    C: float = 1.0,
+    seed: int = 42,
+    verbose: bool = True,
+):
+    """
+    Notebook-friendly wrapper:
+    - lädt Features aus einem Ordner (optional nur bestimmte subsets)
+    - trainiert SVM mit precomputed kernel
+    """
+    X, y = load_precomputed_features_select(
+        precomp_dir,
+        feature_key=feature_key,
+        subset_ids=subset_ids,
+    )
+
+    return train_svm_with_precomputed_kernel(
+        X, y,
+        n=n,
+        test_size=test_size,
+        C=C,
+        seed=seed,
+        verbose=verbose,
+    )
