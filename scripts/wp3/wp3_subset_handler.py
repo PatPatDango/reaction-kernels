@@ -343,3 +343,36 @@ def ensure_nonempty_or_raise(
             f"Too few samples after filtering: kept={kept} (<{min_needed}). "
             f"subset_ids={list(subset_ids)[:10]}..., allowed_classes={list(allowed_classes)}"
         )
+    
+
+from pathlib import Path
+
+# ==========================================
+# Helper: find available subset IDs in a dir
+# ==========================================
+def available_subset_ids(precomp_dir: str | Path) -> list[int]:
+    precomp_dir = Path(precomp_dir)
+    ids = []
+    for fp in precomp_dir.glob("subset_*.pkl"):
+        # subset_001....pkl -> 1
+        sid = int(fp.name.split("subset_")[1][:3])
+        ids.append(sid)
+    return sorted(set(ids))
+
+# ==========================================
+# Helper: remove subset_ids that don't exist
+# ==========================================
+def sanitize_subset_ids(precomp_dir: str | Path, subset_ids: list[int]) -> list[int]:
+    avail = set(available_subset_ids(precomp_dir))
+    cleaned = [sid for sid in subset_ids if sid in avail]
+    missing = [sid for sid in subset_ids if sid not in avail]
+
+    if missing:
+        print(f"[WARN] Missing subset ids in {precomp_dir}: {missing}")
+
+    if not cleaned:
+        raise ValueError(
+            f"After sanitizing, subset_ids is empty.\n"
+            f"Available ids (first 50): {sorted(avail)[:50]}"
+        )
+    return cleaned
