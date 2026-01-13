@@ -8,7 +8,7 @@ import networkx as nx
 
 # Parse Individual Chemical Graphs as NetworkX Objects
 def visualize_graph(rsmi:str):
-    educt_graph, product_graph = rsmi_to_graph(rsmi)
+    educt_graph, product_graph = rsmi_to_graph(rsmi, drop_non_aam=False, use_index_as_atom_map=False)
 
     print("Eductgraph")
     for n, d in educt_graph.nodes(data=True):
@@ -23,7 +23,7 @@ def visualize_graph(rsmi:str):
         print(u,v, d)
 
     # Full ITS graph as NetworkX Object
-    full_graph = rsmi_to_its(rsmi, core=False)
+    full_graph = rsmi_to_its(rsmi, core=False,  drop_non_aam=False, use_index_as_atom_map=False)
 
     print("ITS graph")
     for n, d in full_graph.nodes(data=True):
