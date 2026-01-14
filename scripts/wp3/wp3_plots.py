@@ -8,231 +8,7 @@ from typing import Dict, Any, Optional, Iterable
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-
-def plot_experiment_results_old(df: pd.DataFrame):
-    """
-    Create a compact set of plots for WP3 experiments.
-
-    Required columns:
-      - kernel: str (e.g., 'DRF–WL', 'ITS–WL')
-      - mode: str (e.g., 'edge', 'vertex', 'sp')
-      - n: int
-      - test_size: float
-      - accuracy: float
-
-    Optional:
-      - runtime_sec: float
-    Returns: dict of plotly figures
-    """
-    required = {"kernel", "mode", "n", "test_size", "accuracy"}
-    missing = required - set(df.columns)
-    if missing:
-        raise KeyError(f"plot_experiment_results: missing columns {missing}. Have: {list(df.columns)}")
-
-    # Make sure types are sensible
-    d = df.copy()
-    d["n"] = d["n"].astype(int)
-    d["test_size"] = d["test_size"].astype(float)
-    d["accuracy"] = d["accuracy"].astype(float)
-
-    figs = {}
-
-    # ---- Plot A: Baseline (best row per kernel for a chosen baseline filter) ----
-    # We simply show overall best accuracy per kernel in the provided df
-    base = (
-        d.groupby("kernel", as_index=False)["accuracy"]
-        .max()
-        .sort_values("accuracy", ascending=False)
-    )
-    figs["baseline_best_per_kernel"] = px.bar(
-        base, x="kernel", y="accuracy",
-        title="Best Accuracy per Kernel (across provided experiments)",
-        text="accuracy",
-    )
-
-    # ---- Plot B: Mode comparison (grouped bar) ----
-    # If multiple n/test_size exist, we aggregate with mean to keep it readable
-    mode_cmp = (
-        d.groupby(["kernel", "mode"], as_index=False)["accuracy"]
-        .mean()
-        .sort_values(["kernel", "mode"])
-    )
-    figs["mode_comparison"] = px.bar(
-        mode_cmp, x="mode", y="accuracy", color="kernel", barmode="group",
-        title="Accuracy by Feature Mode (mean over runs)",
-    )
-
-    # ---- Plot C: Dataset size effect (line plot) ----
-    size_cmp = (
-        d.groupby(["kernel", "mode", "n"], as_index=False)["accuracy"]
-        .mean()
-        .sort_values("n")
-    )
-    figs["dataset_size_effect"] = px.line(
-        size_cmp, x="n", y="accuracy", color="kernel", line_dash="mode",
-        markers=True,
-        title="Accuracy vs Dataset Size (mean over runs)",
-    )
-
-    # ---- Plot D: Train/Test split effect (line plot) ----
-    split_cmp = (
-        d.groupby(["kernel", "mode", "test_size"], as_index=False)["accuracy"]
-        .mean()
-        .sort_values("test_size")
-    )
-    figs["split_effect"] = px.line(
-        split_cmp, x="test_size", y="accuracy", color="kernel", line_dash="mode",
-        markers=True,
-        title="Accuracy vs Test Size (mean over runs)",
-    )
-
-    # ---- Plot E (optional): Runtime ----
-    if "runtime_sec" in d.columns:
-        rt = (
-            d.groupby(["kernel", "mode"], as_index=False)["runtime_sec"]
-            .mean()
-            .sort_values("runtime_sec", ascending=False)
-        )
-        figs["runtime_by_mode"] = px.bar(
-            rt, x="mode", y="runtime_sec", color="kernel", barmode="group",
-            title="Runtime by Kernel/Mode (mean over runs)",
-        )
-
-    return figs
-
-def plot_experiment_results(df: pd.DataFrame, title: str = "WP3 SVM Experiments Dashboard"):
-    """
-    Expects df with columns at least:
-    ['tag','kernel','mode','n','test_size','accuracy','subset_ids']
-    """
-
-    d = df.copy()
-
-    # --- make nicer labels / ensure types ---
-    if "mode" in d.columns:
-        d["mode"] = d["mode"].astype(str)
-    if "kernel" in d.columns:
-        d["kernel"] = d["kernel"].astype(str)
-    if "tag" in d.columns:
-        d["tag"] = d["tag"].astype(str)
-
-    # Convert subset_ids to readable string (optional, for hover)
-    if "subset_ids" in d.columns:
-        d["subset_ids_str"] = d["subset_ids"].apply(lambda x: ",".join(map(str, x)) if isinstance(x, (list, tuple)) else str(x))
-
-    # -----------------------------
-    # Plot A: Heatmap (Kernel x Mode)
-    # -----------------------------
-    # Aggregate across tags/n/test_size if mixed: mean accuracy
-    heat = (
-        d.groupby(["kernel", "mode"], as_index=False)["accuracy"]
-        .mean()
-        .pivot(index="kernel", columns="mode", values="accuracy")
-    )
-    fig_heat = px.imshow(
-        heat,
-        text_auto=".3f",
-        aspect="auto",
-        title="Mean Accuracy Heatmap (Kernel × Mode)",
-    )
-    fig_heat.update_layout(margin=dict(l=20, r=20, t=60, b=20))
-
-    # -----------------------------
-    # Plot B: Accuracy vs n (facet by mode)
-    # -----------------------------
-    if "n" in d.columns and d["n"].notna().any():
-        d_n = d.dropna(subset=["n"]).copy()
-        d_n["n"] = d_n["n"].astype(int)
-
-        fig_n = px.line(
-            d_n.sort_values("n"),
-            x="n",
-            y="accuracy",
-            color="kernel",
-            markers=True,
-            facet_col="mode",
-            facet_col_wrap=3,
-            hover_data=["tag", "test_size", "subset_ids_str"],
-            title="Accuracy vs Dataset Size (n) — faceted by mode",
-        )
-        fig_n.update_yaxes(range=[0, 1])
-        fig_n.update_layout(margin=dict(l=20, r=20, t=60, b=20))
-    else:
-        fig_n = go.Figure()
-        fig_n.update_layout(title="Accuracy vs Dataset Size (n) — not available (missing column 'n')")
-
-    # -----------------------------
-    # Plot C: Accuracy vs test_size (facet by mode)
-    # -----------------------------
-    if "test_size" in d.columns and d["test_size"].notna().any():
-        d_ts = d.dropna(subset=["test_size"]).copy()
-        d_ts["test_size"] = d_ts["test_size"].astype(float)
-
-        fig_ts = px.line(
-            d_ts.sort_values("test_size"),
-            x="test_size",
-            y="accuracy",
-            color="kernel",
-            markers=True,
-            facet_col="mode",
-            facet_col_wrap=3,
-            hover_data=["tag", "n", "subset_ids_str"],
-            title="Accuracy vs Test Split (test_size) — faceted by mode",
-        )
-        fig_ts.update_yaxes(range=[0, 1])
-        fig_ts.update_layout(margin=dict(l=20, r=20, t=60, b=20))
-    else:
-        fig_ts = go.Figure()
-        fig_ts.update_layout(title="Accuracy vs Test Split — not available (missing column 'test_size')")
-
-    # -----------------------------
-    # Plot D: Ranking Table (Top Runs)
-    # -----------------------------
-    top = d.sort_values("accuracy", ascending=False).head(15).copy()
-    cols = ["tag", "kernel", "mode", "n", "test_size", "accuracy", "subset_ids_str"]
-    cols = [c for c in cols if c in top.columns]
-
-    fig_table = go.Figure(
-        data=[
-            go.Table(
-                header=dict(values=cols, align="left"),
-                cells=dict(values=[top[c].tolist() for c in cols], align="left"),
-            )
-        ]
-    )
-    fig_table.update_layout(title="Top 15 Runs (highest accuracy)")
-
-    # -----------------------------
-    # Plot E (optional but cool): Scatter "Pareto-ish"
-    # accuracy vs n, colored by kernel, symbol by mode
-    # -----------------------------
-    if "n" in d.columns and d["n"].notna().any():
-        fig_scatter = px.scatter(
-            d_n,
-            x="n",
-            y="accuracy",
-            color="kernel",
-            symbol="mode",
-            hover_data=["tag", "test_size", "subset_ids_str"],
-            title="Accuracy vs n (all runs) — kernel color, mode symbol",
-        )
-        fig_scatter.update_yaxes(range=[0, 1])
-        fig_scatter.update_layout(margin=dict(l=20, r=20, t=60, b=20))
-    else:
-        fig_scatter = go.Figure()
-        fig_scatter.update_layout(title="Accuracy vs n scatter — not available")
-
-    # -----------------------------
-    # Return as dict for flexible notebook display
-    # -----------------------------
-    return {
-        "heatmap_kernel_mode": fig_heat,
-        "acc_vs_n_by_mode": fig_n,
-        "acc_vs_testsize_by_mode": fig_ts,
-        "scatter_acc_vs_n": fig_scatter,
-        "top_runs_table": fig_table,
-    }
-
+#bleibt
 def fig2_style_svm_from_kernel(
     K: np.ndarray,
     y,
@@ -358,6 +134,7 @@ def fig2_style_svm_from_kernel(
 
     return fig, {"class_a": class_a, "class_b": class_b, "n_samples": int(mask.sum())}
 
+#bleibt
 def plot_heatmaps_by_k(df, metric="accuracy"):
     df = df.dropna(subset=["k"])
     df["kernel_mode"] = df["kernel"] + " | " + df["mode"]
@@ -398,33 +175,7 @@ def plot_heatmaps_by_k(df, metric="accuracy"):
     plt.tight_layout()
     plt.show()
 
-def plot_bar_comparison(df, group_by="k", title_prefix=""):
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-
-    # ✅ WICHTIG: sofort kopieren
-    d = df.copy()
-
-    # Optionales Filtern
-    if group_by in d.columns:
-        d = d.dropna(subset=[group_by]).copy()
-
-    plt.figure(figsize=(9, 5))
-    sns.barplot(
-        data=d,
-        x=group_by,
-        y="accuracy",
-        hue="kernel",
-        ci="sd",
-        palette="Set2"
-    )
-
-    plt.title(f"{title_prefix} (mean ± std)")
-    plt.ylim(0.3, 1.0)
-    plt.tight_layout()
-    plt.show()
-
-
+#bleibt
 def plot_difference_heatmap(df):
     df = df.dropna(subset=["k"])
 
@@ -458,40 +209,7 @@ def plot_difference_heatmap(df):
     plt.tight_layout()
     plt.show()
 
-def plot_slope_drf_vs_its(df, k=None, tag=None):
-    d = df.copy()
-    if k is not None:
-        d = d[d["k"] == k]
-    if tag is not None:
-        d = d[d["tag"] == tag]
-
-    agg = (d.groupby(["kernel", "mode"], as_index=False)["accuracy"]
-             .mean())
-
-    # Pivot: rows=mode, cols=kernel
-    p = agg.pivot(index="mode", columns="kernel", values="accuracy").reset_index()
-    # Erwartete Spaltennamen
-    if "DRF–WL" not in p.columns or "ITS–WL" not in p.columns:
-        raise ValueError("Erwarte kernel-Spalten 'DRF–WL' und 'ITS–WL' in df['kernel'].")
-
-    fig = go.Figure()
-    for _, row in p.iterrows():
-        fig.add_trace(go.Scatter(
-            x=["ITS–WL", "DRF–WL"],
-            y=[row["ITS–WL"], row["DRF–WL"]],
-            mode="lines+markers+text",
-            text=[None, row["mode"]],
-            textposition="middle right",
-            name=row["mode"],
-            showlegend=False
-        ))
-
-    title = "DRF vs ITS (mean accuracy)"
-    if tag: title += f" | {tag}"
-    if k is not None: title += f" | k={k}"
-    fig.update_layout(title=title, yaxis_title="accuracy", xaxis_title="")
-    fig.show()
-
+#bleibt
 def plot_drf_minus_its_bar(df):
     import matplotlib.pyplot as plt
 
@@ -520,6 +238,7 @@ def plot_drf_minus_its_bar(df):
     plt.tight_layout()
     plt.show()
 
+#bleibt
 def plot_drf_vs_its_dots(df):
     d = df.copy()
     d = d[d["kernel"].isin(["DRF–WL", "ITS–WL"])]
@@ -539,6 +258,7 @@ def plot_drf_vs_its_dots(df):
     plt.tight_layout()
     plt.show()
 
+#bleibt
 def plot_accuracy_by_k(df):
     import seaborn as sns
     import matplotlib.pyplot as plt
@@ -559,9 +279,6 @@ def plot_accuracy_by_k(df):
     plt.title("Accuracy vs k (shared classes)")
     plt.tight_layout()
     plt.show()
-
-
-
 
 # ============================================================
 # WP3 Plots (Extended): k=1 vs k=2 comparisons + confidence bands
@@ -588,7 +305,7 @@ def _agg_mean_std(
     g[f"{metric}_std"] = g[f"{metric}_std"].fillna(0.0)
     return g
 
-
+#bleiben 
 # ------------------------------------------------------------
 # Plot 1: Accuracy curves with confidence bands (mean ± std)
 # ------------------------------------------------------------

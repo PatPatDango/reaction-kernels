@@ -1,3 +1,36 @@
+# scripts/wp3/wp3_subset_handler.py
+"""
+WP3 Subset Handler — Option 1 (ONLY)
+
+Option 1 = "Pick subsets robustly so DRF and ITS are comparable"
+
+We support two practical Option-1 variants (both are robust and avoid n_samples=0):
+
+A) COMMON-SUBSETS ONLY (no class constraints)
+   - take the subset_ids that exist in BOTH DRF and ITS folders
+   - good if you just want lots of data fast
+
+B) SOFT SHARED k-CLASSES (recommended)
+   - first choose common subset_ids (exists for both)
+   - then choose k "must-have" classes from those subsets (top-k frequent)
+   - then keep only subset_ids where each must-have class has at least min_per_class
+   - each subset may contain additional classes (soft/realistic)
+
+This file contains EVERYTHING you need for Option 1:
+- scanning subset IDs
+- indexing class counts per subset
+- choosing subset IDs for option 1
+- sanity helpers to ensure non-empty after filtering
+
+Your SVM / kernel code should just call:
+  cfg = make_option1_soft_shared_k_classes_config(...)
+  subset_ids = cfg["subset_ids"]
+  allowed_classes = cfg["target_classes"]  # use when you filter classes
+
+Note:
+- This expects your PKLs to have key "classes" (list of rxn_class labels).
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -212,8 +245,96 @@ def make_option1_soft_shared_k_classes_config(
         "n_common_available": len(common_ids),
     }
 
-def print_k_config(cfg: Dict[str, Any]) -> None:
+
+# ============================================================
+# 5) Sanity helpers (highly recommended in notebook)
+# ============================================================
+
+def print_option1_config(cfg: Dict[str, Any]) -> None:
     print("Option1 config:", cfg.get("name"))
     print("subset_ids (first 20):", (cfg.get("subset_ids") or [])[:20])
     print("n_subsets:", len(cfg.get("subset_ids") or []))
     print("target_classes:", cfg.get("target_classes"))
+
+
+def count_samples_if_filtered(
+    precomp_dir: str | Path,
+    *,
+    subset_ids: Sequence[int],
+    allowed_classes: Sequence[str],
+    class_key: str = "classes",
+) -> int:
+    """
+    Fast check: how many labels remain after filtering to allowed_classes?
+    Uses only label lists from PKLs (no features).
+    """
+    precomp_dir = Path(precomp_dir)
+    allowed = set(map(str, allowed_classes))
+
+    total = 0
+    for fp in list_subset_pkls(precomp_dir, subset_ids=subset_ids):
+        obj = load_pkl(fp)
+        y = obj.get(class_key, None)
+        if y is None:
+            raise KeyError(f"{fp.name}: missing key '{class_key}'")
+        total += sum(1 for lab in y if str(lab) in allowed)
+    return total
+
+
+def ensure_nonempty_or_raise(
+    precomp_dir: str | Path,
+    *,
+    subset_ids: Sequence[int],
+    allowed_classes: Optional[Sequence[str]],
+    min_needed: int = 20,
+    class_key: str = "classes",
+) -> None:
+    """
+    Raises a ValueError if filtering would leave too few samples.
+    """
+    if allowed_classes is None:
+        return
+    kept = count_samples_if_filtered(
+        precomp_dir,
+        subset_ids=subset_ids,
+        allowed_classes=allowed_classes,
+        class_key=class_key,
+    )
+    if kept < min_needed:
+        raise ValueError(
+            f"Too few samples after filtering: kept={kept} (<{min_needed}). "
+            f"subset_ids={list(subset_ids)[:10]}..., allowed_classes={list(allowed_classes)}"
+        )
+    
+
+from pathlib import Path
+
+# ==========================================
+# Helper: find available subset IDs in a dir
+# ==========================================
+def available_subset_ids(precomp_dir: str | Path) -> list[int]:
+    precomp_dir = Path(precomp_dir)
+    ids = []
+    for fp in precomp_dir.glob("subset_*.pkl"):
+        # subset_001....pkl -> 1
+        sid = int(fp.name.split("subset_")[1][:3])
+        ids.append(sid)
+    return sorted(set(ids))
+
+# ==========================================
+# Helper: remove subset_ids that don't exist
+# ==========================================
+def sanitize_subset_ids(precomp_dir: str | Path, subset_ids: list[int]) -> list[int]:
+    avail = set(available_subset_ids(precomp_dir))
+    cleaned = [sid for sid in subset_ids if sid in avail]
+    missing = [sid for sid in subset_ids if sid not in avail]
+
+    if missing:
+        print(f"[WARN] Missing subset ids in {precomp_dir}: {missing}")
+
+    if not cleaned:
+        raise ValueError(
+            f"After sanitizing, subset_ids is empty.\n"
+            f"Available ids (first 50): {sorted(avail)[:50]}"
+        )
+    return cleaned
