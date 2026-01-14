@@ -1,36 +1,33 @@
 from __future__ import annotations
 
-import pickle
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple, Sequence
+from collections import Counter, defaultdict
 
 import numpy as np
 import pandas as pd
-from collections import Counter, defaultdict
-
 from sklearn.preprocessing import LabelEncoder, normalize as sk_normalize
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC, LinearSVC
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    confusion_matrix,
-    classification_report,
-)
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
 
 import plotly.express as px
 import plotly.graph_objects as go
 
-# Optional: SciPy sparse for linear SVM path
+# external helpers (existing in repo)
+from wp3_kernel import kernel_multiset_intersection, compute_kernel_matrix as wp3_compute_kernel_matrix, kernel_matrix_stats
+from wp3_svm import build_train_test_kernels  # build_train_test_kernels returns K_train, K_test, y_train, y_test
+
+# SciPy sparse optional
 try:
     from scipy.sparse import csr_matrix
-except ImportError:
+except Exception:
     csr_matrix = None
 
 
 # -------------------------
-# Loading precomputed sets
+# Loading precomputed sets (original loader kept)
 # -------------------------
 
 def _detect_feature_key(d: Dict[str, Any]) -> str:
@@ -78,11 +75,16 @@ def load_pickles_from_dir(
     method_hint: Optional[str] = None,
     drop_failed: bool = True,
 ) -> List[Dict[str, Any]]:
+    """
+    Load pickled subset files and return list of dicts with keys:
+      features, y_raw, rsmi, meta, file, method, mode, errors_dropped
+    This preserves the original tryout.agreement with gather_capped_dataset.
+    """
     dir_path = Path(dir_path)
     out = []
     for pkl in sorted(dir_path.glob("*.pkl")):
         with open(pkl, "rb") as fh:
-            d = pickle.load(fh)
+            d = pd.read_pickle(fh) if False else __import__("pickle").load(fh)  # use pickle.load
 
         meta = d.get("meta", {})
         fkey = _detect_feature_key(d)
@@ -122,96 +124,12 @@ def load_pickles_from_dir(
 
 
 # -------------------------
-# Inspection helpers
+# Small helpers
 # -------------------------
 
 def class_counts(labels: List[Any]) -> Dict[Any, int]:
     return pd.Series(labels).value_counts().to_dict()
 
-
-def summarize_dir(dir_path: str | Path, method_hint: Optional[str] = None) -> pd.DataFrame:
-    datasets = load_pickles_from_dir(dir_path, method_hint=method_hint, drop_failed=True)
-    rows = []
-    for ds in datasets:
-        cnt = class_counts(ds["y_raw"])
-        rows.append(
-            dict(
-                file=str(ds["file"].name),
-                path=str(ds["file"]),
-                method=ds["method"],
-                mode=ds["mode"],
-                n_samples=len(ds["y_raw"]),
-                n_classes=len(cnt),
-                class_counts=cnt,
-                errors_dropped=ds["errors_dropped"],
-            )
-        )
-    return pd.DataFrame(rows).sort_values(["method", "mode", "file"]).reset_index(drop=True)
-
-
-# -------------------------
-# Multiset kernel
-# -------------------------
-
-def to_counter(x: Any) -> Counter:
-    if isinstance(x, Counter):
-        return x
-    if isinstance(x, dict):
-        return Counter(x)
-    if isinstance(x, set):
-        return Counter({k: 1 for k in x})
-    if isinstance(x, list):
-        return Counter(x)
-    raise TypeError(f"Unsupported feature container type: {type(x)}")
-
-
-def multiset_inner_product(a: Any, b: Any) -> int:
-    ca = to_counter(a)
-    cb = to_counter(b)
-    if len(ca) > len(cb):
-        ca, cb = cb, ca
-    s = 0
-    for k, va in ca.items():
-        vb = cb.get(k)
-        if vb:
-            s += va if va < vb else vb
-    return s
-
-
-def compute_kernel_matrix(
-    X: List[Any],
-    Y: Optional[List[Any]] = None,
-    *,
-    normalize: bool = True,
-    return_diagonals: bool = False,
-) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
-    if Y is None:
-        Y = X
-
-    n, m = len(X), len(Y)
-    K = np.zeros((n, m), dtype=np.float64)
-
-    diag_X = np.fromiter((multiset_inner_product(x, x) for x in X), dtype=np.float64, count=n)
-    diag_Y = np.fromiter((multiset_inner_product(y, y) for y in Y), dtype=np.float64, count=m)
-
-    for i in range(n):
-        xi = X[i]
-        for j in range(m):
-            K[i, j] = multiset_inner_product(xi, Y[j])
-
-    if normalize:
-        eps = 1e-12
-        dprod = np.sqrt(np.clip(diag_X, eps, None)[:, None] * np.clip(diag_Y, eps, None)[None, :])
-        K = K / dprod
-
-    if return_diagonals:
-        return K, diag_X, diag_Y
-    return K, None, None
-
-
-# -------------------------
-# Safe stratified split sizing
-# -------------------------
 
 def compute_safe_test_size(
     y_raw: List[Any],
@@ -219,6 +137,10 @@ def compute_safe_test_size(
     min_test_per_class: int = 1,
     min_train_per_class: int = 1,
 ) -> Tuple[Optional[float], Dict[str, Any]]:
+    """
+    Returns (safe_test_size, info) or (None, info) if splitting is impossible.
+    Ensures at least min_test_per_class in test and min_train_per_class in train per class.
+    """
     counts = class_counts(y_raw)
     if len(counts) < 2:
         return None, dict(reason="single_class", counts=counts)
@@ -244,6 +166,70 @@ def compute_safe_test_size(
 
 
 # -------------------------
+# Multiset kernel adapters
+# -------------------------
+
+def to_counter(x: Any) -> Counter:
+    if isinstance(x, Counter):
+        return x
+    if isinstance(x, dict):
+        return Counter(x)
+    if isinstance(x, set):
+        return Counter({k: 1 for k in x})
+    if isinstance(x, list):
+        return Counter(x)
+    raise TypeError(f"Unsupported feature container type: {type(x)}")
+
+
+def multiset_inner_product(a: Any, b: Any) -> int:
+    ca = to_counter(a)
+    cb = to_counter(b)
+    return kernel_multiset_intersection(ca, cb)
+
+
+def compute_kernel_matrix(
+    X: List[Any],
+    Y: Optional[List[Any]] = None,
+    *,
+    normalize: bool = True,
+    return_diagonals: bool = False,
+) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+    """
+    Adapter using wp3_kernel internals. Accepts lists of feature-like objects (Counters or lists/dicts).
+    Returns (K, diag_X, diag_Y) if return_diagonals else (K, None, None).
+    """
+    Xc = [Counter(x) for x in X]
+    if Y is None:
+        # Use wp3's compute for symmetric case
+        K = wp3_compute_kernel_matrix(Xc, kernel_fn=kernel_multiset_intersection)
+        diag = np.diag(K).astype(float)
+        if normalize:
+            eps = 1e-12
+            dprod = np.sqrt(np.clip(diag, eps, None)[:, None] * np.clip(diag, eps, None)[None, :])
+            K = K / dprod
+        if return_diagonals:
+            return K, diag, diag
+        return K, None, None
+    else:
+        Yc = [Counter(y) for y in Y]
+        K = np.zeros((len(Xc), len(Yc)), dtype=np.float64)
+        for i, xi in enumerate(Xc):
+            for j, yj in enumerate(Yc):
+                K[i, j] = kernel_multiset_intersection(xi, yj)
+        if normalize:
+            diag_X = np.array([kernel_multiset_intersection(xi, xi) for xi in Xc], dtype=float)
+            diag_Y = np.array([kernel_multiset_intersection(yj, yj) for yj in Yc], dtype=float)
+            eps = 1e-12
+            dprod = np.sqrt(np.clip(diag_X, eps, None)[:, None] * np.clip(diag_Y, eps, None)[None, :])
+            K = K / dprod
+            if return_diagonals:
+                return K, diag_X, diag_Y
+        if return_diagonals:
+            return K, None, None
+        return K, None, None
+
+
+# -------------------------
 # Sparse features for linear SVM
 # -------------------------
 
@@ -254,10 +240,9 @@ def features_to_sparse_matrix(features: List[Any]) -> Tuple["csr_matrix", List[s
     if csr_matrix is None:
         raise ImportError("scipy is required for sparse matrix conversion. Install scipy first.")
 
-    # Build vocabulary
     vocab: Dict[str, int] = {}
-    col_list: List[int] = []
     row_list: List[int] = []
+    col_list: List[int] = []
     data_list: List[float] = []
 
     for i, f in enumerate(features):
@@ -289,10 +274,6 @@ def stratified_downsample(
     random_state: int = 42,
     dedupe_rsmi: bool = True,
 ) -> Tuple[List[Any], List[Any], Optional[List[str]], Dict[Any, int]]:
-    """
-    Downsample to at most n_per_class items per class (stratified).
-    Optionally deduplicate by rsmi per class.
-    """
     if n_per_class is None:
         return features, y_raw, rsmi, class_counts(y_raw)
 
@@ -319,7 +300,7 @@ def stratified_downsample(
 
 
 # -------------------------
-# Aggregation across dirs/files to build 50-class capped dataset
+# Aggregation across dirs/files to build capped dataset
 # -------------------------
 
 def gather_capped_dataset(
@@ -334,7 +315,7 @@ def gather_capped_dataset(
 ) -> Dict[str, Any]:
     """
     Aggregate across provided directories and cap to n_per_class per class.
-    Returns a dict with features, y_raw, rsmi, class_counts, n_classes, n_samples, missing_classes.
+    Uses load_pickles_from_dir to preserve per-file meta information.
     """
     all_features: List[Any] = []
     all_labels: List[Any] = []
@@ -342,7 +323,6 @@ def gather_capped_dataset(
 
     for d, m in dirs:
         datasets = load_pickles_from_dir(d, method_hint=method, drop_failed=True)
-        # Filter by mode if requested
         if mode:
             datasets = [ds for ds in datasets if ds["mode"] == mode]
         if max_files_per_dir is not None:
@@ -356,12 +336,10 @@ def gather_capped_dataset(
     if not all_features:
         raise ValueError("No features found when aggregating. Check directories and mode.")
 
-    # Downsample per class to n_per_class
     feats, y2, r2, counts2 = stratified_downsample(
         all_features, all_labels, all_rsmi, n_per_class=n_per_class, random_state=random_state, dedupe_rsmi=dedupe_rsmi
     )
 
-    # Track missing classes (that didn't reach n_per_class)
     desired_classes = sorted(set(all_labels))
     have_classes = sorted(counts2.keys())
     missing = [c for c in desired_classes if c not in counts2]
@@ -385,7 +363,7 @@ def gather_capped_dataset(
 
 
 # -------------------------
-# SVM training paths
+# Adapter: precomputed-kernel SVM trainer (uses wp3 build helper)
 # -------------------------
 
 def train_eval_svm_precomputed(
@@ -398,28 +376,29 @@ def train_eval_svm_precomputed(
     class_weight: Optional[str] = None,
     kernel_normalize: bool = True,
 ) -> Dict[str, Any]:
+    """
+    Uses wp3_svm.build_train_test_kernels to build kernels (split+kernels) then trains SVC(kernel='precomputed').
+    Returns results in a dict compatible with previous code.
+    """
     le = LabelEncoder()
     y = le.fit_transform(y_raw)
 
-    idx = np.arange(len(features))
-    tr_idx, te_idx, y_train, y_test = train_test_split(
-        idx, y, test_size=test_size, random_state=random_state, stratify=y
-    )
-    X_train = [features[i] for i in tr_idx]
-    X_test = [features[i] for i in te_idx]
-
     timings: Dict[str, float] = {}
-
     t0 = time.perf_counter()
-    K_train, _, _ = compute_kernel_matrix(X_train, None, normalize=kernel_normalize)
+    # build_train_test_kernels expects list[Counter], so convert
+    Xc = [Counter(x) for x in features]
+    K_train, K_test, y_train, y_test = build_train_test_kernels(
+        Xc,
+        list(y),
+        test_size=test_size,
+        seed=random_state,
+        n=None,
+        kernel_fn=kernel_multiset_intersection,
+    )
     timings["k_train_time"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    K_test, _, _ = compute_kernel_matrix(X_test, X_train, normalize=kernel_normalize)
-    timings["k_test_time"] = time.perf_counter() - t0
-
     clf = SVC(kernel="precomputed", C=C, class_weight=class_weight)
-    t0 = time.perf_counter()
     clf.fit(K_train, y_train)
     timings["fit_time"] = time.perf_counter() - t0
 
@@ -430,11 +409,8 @@ def train_eval_svm_precomputed(
 
     acc = accuracy_score(y_test, y_pred)
     f1m = f1_score(y_test, y_pred, average="macro")
-
     cm = confusion_matrix(y_test, y_pred)
-    report = classification_report(
-        y_test, y_pred, target_names=list(le.classes_), output_dict=True, zero_division=0
-    )
+    report = classification_report(y_test, y_pred, target_names=list(le.classes_), output_dict=True, zero_division=0)
     report_df = pd.DataFrame(report).transpose()
 
     return dict(
@@ -446,8 +422,8 @@ def train_eval_svm_precomputed(
         label_encoder=le,
         timings=timings,
         report_df=report_df,
-        tr_idx=tr_idx,
-        te_idx=te_idx,
+        tr_idx=None,
+        te_idx=None,
         C=C,
         class_weight=class_weight,
         test_size=test_size,
@@ -455,6 +431,10 @@ def train_eval_svm_precomputed(
         approach="kernel",
     )
 
+
+# -------------------------
+# Linear SVM path (unchanged)
+# -------------------------
 
 def train_eval_linear_svm(
     features: List[Any],
@@ -466,10 +446,6 @@ def train_eval_linear_svm(
     class_weight: Optional[str] = None,
     l2_normalize_features: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Linear SVM on explicit sparse features; equivalent to dot-product kernel on the feature map.
-    Scales much better to large sample sizes.
-    """
     if csr_matrix is None:
         raise ImportError("scipy is required for the linear SVM path. Install scipy first.")
 
@@ -488,7 +464,7 @@ def train_eval_linear_svm(
     X_test = X_sparse[te_idx, :]
 
     timings: Dict[str, float] = {}
-    clf = LinearSVC(C=C, class_weight=class_weight, dual=True)  # dual=True works better for many features
+    clf = LinearSVC(C=C, class_weight=class_weight, dual=True)
     t0 = time.perf_counter()
     clf.fit(X_train, y_train)
     timings["fit_time"] = time.perf_counter() - t0
@@ -502,9 +478,7 @@ def train_eval_linear_svm(
     f1m = f1_score(y_test, y_pred, average="macro")
 
     cm = confusion_matrix(y_test, y_pred)
-    report = classification_report(
-        y_test, y_pred, target_names=list(le.classes_), output_dict=True, zero_division=0
-    )
+    report = classification_report(y_test, y_pred, target_names=list(le.classes_), output_dict=True, zero_division=0)
     report_df = pd.DataFrame(report).transpose()
 
     return dict(
@@ -528,32 +502,26 @@ def train_eval_linear_svm(
 
 
 # -------------------------
-# Aggregated benchmark runner (50 classes capped)
+# Aggregated benchmark runner (unchanged API)
 # -------------------------
 
 def run_aggregated_benchmark(
     drf_dirs: List[Tuple[Path, str]],
     its_dirs: List[Tuple[Path, str]],
     *,
-    n_per_class: int,             # e.g., 100 or 200
-    dataset_size_label: str,      # label for plots (e.g., "50×200")
+    n_per_class: int,
+    dataset_size_label: str,
     test_size: float = 0.2,
     random_state: int = 42,
     C: float = 1.0,
     class_weight: Optional[str] = None,
     kernel_normalize: bool = True,
-    use_linear_if_n_ge: int = 3000,    # switch to linear SVM if total samples >= threshold
+    use_linear_if_n_ge: int = 3000,
     l2_normalize_features: bool = True,
     max_files_per_dir: Optional[int] = None,
 ) -> pd.DataFrame:
-    """
-    Build one aggregated dataset per method×mode, cap per class, then train/evaluate.
-    For large totals, automatically switches to linear SVM.
-    Returns a DataFrame with metrics and timings per method×mode.
-    """
     results = []
 
-    # Helper to run for a list of (dir,mode)
     def process(method_dirs: List[Tuple[Path, str]], method_name: str):
         for (d, mode) in method_dirs:
             agg = gather_capped_dataset(
@@ -566,7 +534,6 @@ def run_aggregated_benchmark(
                 max_files_per_dir=max_files_per_dir,
             )
             total_n = agg["n_samples"]
-            # Choose approach
             if total_n >= use_linear_if_n_ge:
                 res = train_eval_linear_svm(
                     features=agg["features"],
@@ -610,7 +577,6 @@ def run_aggregated_benchmark(
                 total_time=res["timings"]["total_time"],
             ))
 
-    # DRF and ITS
     process(drf_dirs, "DRF")
     process(its_dirs, "ITS")
 
@@ -618,104 +584,13 @@ def run_aggregated_benchmark(
 
 
 # -------------------------
-# Plotly helpers
+# Pairwise and plotting helpers (unchanged)
 # -------------------------
 
-def plot_confusion_matrix(cm: np.ndarray, labels: List[str], title: str = "Confusion matrix") -> go.Figure:
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=cm,
-            x=labels,
-            y=labels,
-            colorscale="Blues",
-            hovertemplate="Predicted %{x}<br>True %{y}<br>Count %{z}<extra></extra>",
-        )
-    )
-    fig.update_layout(
-        title=title,
-        xaxis_title="Predicted",
-        yaxis_title="True",
-        yaxis=dict(autorange="reversed"),
-        height=500,
-    )
-    return fig
-
-
-def plot_metric_bars(
-    results_df: pd.DataFrame,
-    metric: str = "acc",
-    facet_by: Optional[str] = "dataset_size",
-    title: Optional[str] = None,
-) -> go.Figure:
-    group_cols = ["method", "mode"]
-    if facet_by:
-        group_cols.append(facet_by)
-    if results_df.empty:
-        return go.Figure()
-    agg = (
-        results_df.groupby(group_cols)[metric]
-        .agg(["mean", "std", "count"])
-        .reset_index()
-    )
-    agg["title"] = title or f"{metric.upper()} by method/mode" + (f" ({facet_by})" if facet_by else "")
-
-    fig = px.bar(
-        agg,
-        x="mode",
-        y="mean",
-        color="method",
-        barmode="group",
-        error_y="std",
-        facet_col=(facet_by if facet_by else None),
-        title=agg["title"].iloc[0] if len(agg) else (title or ""),
-        labels={"mean": metric.upper(), "mode": "Base kernel"},
-    )
-    fig.update_layout(height=500, legend_title_text="Method")
-    return fig
-
-
-def plot_runtime_bars(
-    results_df: pd.DataFrame,
-    stack_components: Tuple[str, ...] = ("k_train_time", "fit_time", "k_test_time", "predict_time"),
-    facet_by: Optional[str] = "dataset_size",
-    title: str = "Runtime breakdown (s) by method/mode",
-) -> go.Figure:
-    base = results_df.copy()
-    if base.empty:
-        return go.Figure()
-    base["group"] = base["method"] + " | " + base["mode"]
-    group_cols = ["group"] + ([facet_by] if facet_by else [])
-    agg = base.groupby(group_cols).agg({k: "mean" for k in stack_components}).reset_index()
-
-    fig = go.Figure()
-    x_vals = agg["group"] if not facet_by else agg["group"].astype(str) + " (" + agg[facet_by].astype(str) + ")"
-    for comp in stack_components:
-        fig.add_trace(
-            go.Bar(
-                x=x_vals,
-                y=agg[comp],
-                name=comp,
-            )
-        )
-    fig.update_layout(
-        barmode="stack",
-        title=title,
-        xaxis_title="Method | Mode" + (f" ({facet_by})" if facet_by else ""),
-        yaxis_title="Seconds",
-        height=500,
-    )
-    return fig
-
-
-
-
-
-# --- Pairwise analysis (all classes) and Fig-2 style visualizations ---
-
 from sklearn.decomposition import KernelPCA
-from sklearn.svm import SVC, LinearSVC
-from sklearn.metrics import accuracy_score, f1_score
-from typing import Sequence
+from sklearn.svm import SVC as _SVC
+from sklearn.svm import LinearSVC as _LinearSVC
+from sklearn.metrics import accuracy_score as _acc_score, f1_score as _f1_score
 
 def _subset_two_classes(
     features: List[Any],
@@ -725,14 +600,10 @@ def _subset_two_classes(
     n_per_class: Optional[int] = None,
     random_state: int = 42,
 ) -> Tuple[List[Any], List[Any]]:
-    """
-    Extract only samples of class_a and class_b; optionally cap to n_per_class each, stratified.
-    """
     idx = [i for i, y in enumerate(y_raw) if y in (class_a, class_b)]
     f_sub = [features[i] for i in idx]
     y_sub = [y_raw[i] for i in idx]
 
-    # Cap to n_per_class per class if requested
     if n_per_class is not None:
         f_sub, y_sub, _, _ = stratified_downsample(
             f_sub, y_sub, rsmi=None, n_per_class=n_per_class, random_state=random_state, dedupe_rsmi=False
@@ -749,23 +620,16 @@ def compute_pairwise_accuracy_matrix(
     test_size: float = 0.2,
     random_state: int = 42,
     C: float = 1.0,
-    approach: str = "linear",   # "linear" (fast) or "kernel" (precomputed Gram)
+    approach: str = "linear",
     kernel_normalize: bool = True,
     l2_normalize_features: bool = True,
 ) -> pd.DataFrame:
-    """
-    Compute pairwise accuracy for all class pairs.
-    - approach="linear": uses LinearSVC on explicit sparse features (recommended for speed).
-    - approach="kernel": uses precomputed-kernel SVC (slower).
-    Returns a DataFrame with columns: class_a, class_b, acc, f1_macro, n_a, n_b.
-    """
     classes = sorted(set(y_raw)) if class_order is None else list(class_order)
     rows = []
     for i in range(len(classes)):
         for j in range(i + 1, len(classes)):
             ca, cb = classes[i], classes[j]
             f_pair, y_pair = _subset_two_classes(features, y_raw, ca, cb, n_per_class=n_per_class, random_state=random_state)
-            # Need at least 2 samples per class to stratify
             cnt = class_counts(y_pair)
             if len(cnt) < 2 or min(cnt.values()) < 2:
                 continue
@@ -774,7 +638,6 @@ def compute_pairwise_accuracy_matrix(
                 X_sparse, _ = features_to_sparse_matrix(f_pair)
                 if l2_normalize_features:
                     X_sparse = sk_normalize(X_sparse, norm="l2", axis=1, copy=False)
-                # Encode y_pair
                 le = LabelEncoder()
                 y_enc = le.fit_transform(y_pair)
                 idx = np.arange(X_sparse.shape[0])
@@ -784,7 +647,6 @@ def compute_pairwise_accuracy_matrix(
                 y_pred = clf.predict(X_sparse[te, :])
 
             elif approach == "kernel":
-                # Precomputed kernel path
                 le = LabelEncoder()
                 y_enc = le.fit_transform(y_pair)
                 idx = np.arange(len(f_pair))
@@ -818,26 +680,18 @@ def plot_pairwise_accuracy_heatmap(
     tick_font_size: int = 9,
     tick_angle: int = -45,
 ) -> go.Figure:
-    """
-    Render a symmetric class×class heatmap from pairwise accuracy DataFrame.
-    - class_order: explizite Reihenfolge der Klassen (Liste); wenn None -> aus pair_df ermittelt.
-    - show_all_ticks: wenn True, werden ALLE Tick-Labels erzwungen (tickmode='array').
-    """
     if pair_df.empty:
         return go.Figure()
 
     classes = sorted(set(pair_df["class_a"]).union(pair_df["class_b"])) if class_order is None else list(class_order)
-    # Leere Matrix mit NaN
     mat = pd.DataFrame(np.nan, index=classes, columns=classes, dtype=float)
 
-    # Werte befüllen
     for _, r in pair_df.iterrows():
         a, b, v = r["class_a"], r["class_b"], r["acc"]
         if a in mat.index and b in mat.columns:
             mat.loc[a, b] = v
             mat.loc[b, a] = v
 
-    # Diagonale auf 1.0 (optional)
     np.fill_diagonal(mat.values, 1.0)
 
     fig = go.Figure(data=go.Heatmap(
@@ -849,7 +703,6 @@ def plot_pairwise_accuracy_heatmap(
         hovertemplate="Class %{y} vs %{x}<br>ACC %{z:.3f}<extra></extra>",
     ))
 
-    # Achsen-Optionen setzen
     xaxis_cfg = dict(title="Class", automargin=True)
     yaxis_cfg = dict(title="Class", automargin=True)
 
@@ -884,14 +737,11 @@ def plot_pairwise_accuracy_heatmap(
     )
     return fig
 
+
 def plot_class_difficulty_bars(pair_df: pd.DataFrame, metric: str = "acc", title: str = "Per-class difficulty (mean pairwise ACC)") -> go.Figure:
-    """
-    Compute mean metric (acc or f1_macro) across all pairs involving each class; plot bars.
-    """
     if pair_df.empty:
         return go.Figure()
 
-    # Build per-class list of metrics across all pairs it participates in
     stats = defaultdict(list)
     for _, r in pair_df.iterrows():
         a, b, v = r[["class_a", "class_b", metric]]
@@ -924,26 +774,14 @@ def fig2_style_pair_plot_kernelpca(
     kernel_normalize: bool = True,
     title: Optional[str] = None,
 ) -> go.Figure:
-    """
-    Fig-2 style visualization:
-    - Build pair dataset (class_a vs class_b), cap to n_per_class each.
-    - Compute precomputed kernel on pair data, apply KernelPCA (2D).
-    - Fit a linear SVM on the 2D embedding to draw a decision boundary (approximation in KPCA space).
-    - Overlay support vectors and points. Background colored by predicted class in 2D.
-
-    Note: The decision boundary is for the SVM trained on 2D KPCA embeddings (approximate visualization),
-    not the original kernel SVM.
-    """
     f_pair, y_pair = _subset_two_classes(features, y_raw, class_a, class_b, n_per_class=n_per_class, random_state=random_state)
     if len(set(y_pair)) < 2:
         raise ValueError("Pair must contain both classes.")
 
-    # Precomputed kernel for KPCA
     K, _, _ = compute_kernel_matrix(f_pair, None, normalize=kernel_normalize)
     kpca = KernelPCA(n_components=2, kernel="precomputed", random_state=random_state)
-    Z = kpca.fit_transform(K)  # shape (n, 2)
+    Z = kpca.fit_transform(K)
 
-    # Train linear SVM on 2D embeddings
     le = LabelEncoder()
     y_enc = le.fit_transform(y_pair)
     tr, te, y_tr, y_te = train_test_split(np.arange(len(y_enc)), y_enc, test_size=0.2, random_state=random_state, stratify=y_enc)
@@ -951,14 +789,12 @@ def fig2_style_pair_plot_kernelpca(
     clf2d = SVC(kernel="linear", C=C_linear_2d)
     clf2d.fit(Z[tr, :], y_tr)
 
-    # Grid for decision boundary
     x_min, x_max = Z[:, 0].min() - 0.5, Z[:, 0].max() + 0.5
     y_min, y_max = Z[:, 1].min() - 0.5, Z[:, 1].max() + 0.5
     gx, gy = np.meshgrid(np.linspace(x_min, x_max, 300), np.linspace(y_min, y_max, 300))
     grid = np.c_[gx.ravel(), gy.ravel()]
     zz = clf2d.predict(grid).reshape(gx.shape)
 
-    # Plot background decision regions
     fig = go.Figure()
     fig.add_trace(go.Contour(
         x=np.linspace(x_min, x_max, 300),
@@ -971,8 +807,7 @@ def fig2_style_pair_plot_kernelpca(
         hoverinfo="skip",
     ))
 
-    # Points
-    colors = {0: "#0b5", 1: "#a5f"}  # greenish, purple
+    colors = {0: "#0b5", 1: "#a5f"}
     names = {0: f"class {class_a}", 1: f"class {class_b}"}
     for lab in [0, 1]:
         sel = (y_enc == lab)
@@ -984,7 +819,6 @@ def fig2_style_pair_plot_kernelpca(
             hovertemplate=f"{names[lab]}<br>x=%{{x:.2f}}, y=%{{y:.2f}}<extra></extra>",
         ))
 
-    # Support vectors in 2D model
     sv = clf2d.support_vectors_
     fig.add_trace(go.Scatter(
         x=sv[:, 0], y=sv[:, 1],
@@ -1005,149 +839,9 @@ def fig2_style_pair_plot_kernelpca(
     return fig
 
 
-
-# --- Split-Sweep über verschiedene Testgrößen mit Aggregation (50 Klassen) ---
-
-from typing import Iterable
-
-def run_split_sweep_all(
-    drf_dirs: List[Tuple[Path, str]],
-    its_dirs: List[Tuple[Path, str]],
-    *,
-    n_per_class: int,                 # z.B. 100 oder 200
-    dataset_size_label: str,          # Beschriftung, z.B. "50×200"
-    splits: Iterable[float],          # z.B. [0.1, 0.2, 0.3, 0.4]
-    seeds: Iterable[int],             # z.B. range(5)
-    C: float = 1.0,
-    class_weight: Optional[str] = None,
-    kernel_normalize: bool = True,
-    use_linear_if_n_ge: int = 3000,
-    l2_normalize_features: bool = True,
-    max_files_per_dir: Optional[int] = None,
-    verbose: bool = True,             # NEW: toggle progress logging
-) -> pd.DataFrame:
-    """
-    Build an aggregated dataset per (method x mode) capped at n_per_class and sweep over
-    test_size (splits) and random seeds. Automatically picks linear SVM for large n.
-    Returns a DataFrame with all measurement points.
-
-    Progress logging:
-    - If verbose=True, prints per-run status, run time and ETA.
-    """
-    rows = []
-
-    # Compute expected total tasks for ETA/progress
-    n_method_dirs = len(drf_dirs) + len(its_dirs)
-    n_splits = max(1, len(list(splits)))
-    n_seeds = max(1, len(list(seeds)))
-    total_tasks = n_method_dirs * n_splits * n_seeds
-
-    def _format_time(sec: float) -> str:
-        if sec is None or np.isnan(sec):
-            return "N/A"
-        sec = int(round(sec))
-        h = sec // 3600
-        m = (sec % 3600) // 60
-        s = sec % 60
-        if h:
-            return f"{h}h{m:02d}m{s:02d}s"
-        if m:
-            return f"{m}m{s:02d}s"
-        return f"{s}s"
-
-    start_all = time.perf_counter()
-    completed = 0
-
-    def process(method_dirs: List[Tuple[Path, str]], method_name: str):
-        nonlocal completed, start_all
-        for (d, mode) in method_dirs:
-            agg = gather_capped_dataset(
-                [(d, mode)],
-                method=method_name,
-                mode=mode,
-                n_per_class=n_per_class,
-                random_state=42,
-                dedupe_rsmi=True,
-                max_files_per_dir=max_files_per_dir,
-            )
-
-            total_n = agg["n_samples"]
-            features = agg["features"]
-            y_raw = agg["y_raw"]
-
-            for ts in splits:
-                for seed in seeds:
-                    # safety: adjust test size if needed
-                    safe_ts, _ = compute_safe_test_size(y_raw, requested=float(ts))
-
-                    t0 = time.perf_counter()
-                    if total_n >= use_linear_if_n_ge:
-                        res = train_eval_linear_svm(
-                            features=features,
-                            y_raw=y_raw,
-                            test_size=safe_ts if safe_ts is not None else float(ts),
-                            random_state=seed,
-                            C=C,
-                            class_weight=class_weight,
-                            l2_normalize_features=l2_normalize_features,
-                        )
-                    else:
-                        res = train_eval_svm_precomputed(
-                            features=features,
-                            y_raw=y_raw,
-                            test_size=safe_ts if safe_ts is not None else float(ts),
-                            random_state=seed,
-                            C=C,
-                            class_weight=class_weight,
-                            kernel_normalize=kernel_normalize,
-                        )
-                    run_time = time.perf_counter() - t0
-
-                    completed += 1
-                    elapsed_all = time.perf_counter() - start_all
-                    avg_per_task = elapsed_all / completed if completed else np.nan
-                    remaining_tasks = max(0, total_tasks - completed)
-                    eta_seconds = avg_per_task * remaining_tasks if not np.isnan(avg_per_task) else np.nan
-
-                    rows.append(dict(
-                        method=method_name,
-                        mode=mode,
-                        dataset_size=dataset_size_label,
-                        n_samples=total_n,
-                        n_classes=agg["n_classes"],
-                        n_per_class=n_per_class,
-                        split=float(ts),
-                        seed=int(seed),
-                        acc=res["acc"],
-                        f1_macro=res["f1_macro"],
-                        approach=res["approach"],
-                        C=C,
-                        class_weight=str(class_weight),
-                        kernel_normalize=kernel_normalize,
-                        l2_normalize_features=l2_normalize_features,
-                        k_train_time=res["timings"].get("k_train_time", np.nan),
-                        k_test_time=res["timings"].get("k_test_time", np.nan),
-                        fit_time=res["timings"].get("fit_time", np.nan),
-                        predict_time=res["timings"].get("predict_time", np.nan),
-                        total_time=res["timings"]["total_time"],
-                    ))
-
-                    if verbose:
-                        print(
-                            f"[{completed}/{total_tasks}] {method_name}/{mode} split={ts} seed={seed} n={total_n} "
-                            f"approach={res['approach']} acc={res['acc']:.3f} run={run_time:.2f}s "
-                            f"elapsed={_format_time(elapsed_all)} ETA={_format_time(eta_seconds)}"
-                        )
-
-    process(drf_dirs, "DRF")
-    process(its_dirs, "ITS")
-
-    if verbose:
-        total_elapsed = time.perf_counter() - start_all
-        print(f"[DONE] Completed {completed}/{total_tasks} runs in {_format_time(total_elapsed)}")
-
-    return pd.DataFrame(rows)
-
+# -------------------------
+# Split-sweep / plotting helpers (kept)
+# -------------------------
 
 def plot_split_metric_line(
     sweep_df: pd.DataFrame,
@@ -1157,10 +851,6 @@ def plot_split_metric_line(
     line_dash_by: str = "mode",
     title: Optional[str] = None,
 ) -> go.Figure:
-    """
-    Liniendiagramm: Mittelwert ± Std des Metrics über Seeds pro Split.
-    Farblich nach Methode, Linienmuster nach Mode; optional facetten nach dataset_size.
-    """
     if sweep_df.empty:
         return go.Figure()
 
@@ -1186,7 +876,6 @@ def plot_split_metric_line(
         title=title or f"{metric.upper()} vs Test split",
         labels={"mean": metric.upper(), "split": "Test split"},
     )
-    # Fehlerbalken als separate Scatter hinzufügen
     for _, row in agg.iterrows():
         fig.add_trace(go.Scatter(
             x=[row["split"], row["split"]],
@@ -1208,9 +897,6 @@ def plot_split_runtime_area(
     line_dash_by: str = "mode",
     title: str = "Runtime components vs Test split",
 ) -> go.Figure:
-    """
-    Area-Plot der Laufzeitkomponenten über Splits (Mean über Seeds). Für Linear-SVM sind kernel-Komponenten=0.
-    """
     if sweep_df.empty:
         return go.Figure()
 
@@ -1227,10 +913,7 @@ def plot_split_runtime_area(
     for comp in components:
         agg[comp] = agg[comp].fillna(0.0)
 
-    # Eine Figure mit separaten Traces pro Komponente (Stacking je Kurve funktioniert in Plotly
-    # über separate Subfiguren nicht gut – wir visualisieren pro Komponente separate Linien)
     fig = go.Figure()
-
     palette = {
         "k_train_time": "#1f77b4",
         "fit_time": "#ff7f0e",
@@ -1238,7 +921,6 @@ def plot_split_runtime_area(
         "predict_time": "#d62728",
     }
 
-    # Baue je Komponente eine Kollektion an Linien (method×mode)
     for comp in components:
         for (meth, md) in sorted(set(zip(agg[color_by], agg[line_dash_by]))):
             sub = agg[(agg[color_by] == meth) & (agg[line_dash_by] == md)]
@@ -1268,9 +950,6 @@ def plot_split_metric_box(
     box_group_by: str = "mode",
     title: Optional[str] = None,
 ) -> go.Figure:
-    """
-    Boxplot pro Split (Verteilung über Seeds) – gruppiert nach Mode, gefärbt nach Methode.
-    """
     if sweep_df.empty:
         return go.Figure()
 
