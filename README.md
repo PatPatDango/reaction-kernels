@@ -220,5 +220,5 @@ This repository covers WP0 (setup and familiarization).
 
 ---
 ## Authors 
-*** Olga Pokrovskaja ***
-*** Patricia Bombik ***
+**Olga Pokrovskaja**
+**Patricia Bombik**
