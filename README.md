@@ -219,3 +219,6 @@ Additional insights gained during extended experimentation and classification ex
 This repository covers WP0 (setup and familiarization).
 
 ---
+## Authors 
+*** Olga Pokrovskaja ***
+*** Patricia Bombik ***
