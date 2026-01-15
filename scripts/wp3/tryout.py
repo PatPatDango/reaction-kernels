@@ -388,6 +388,83 @@ def gather_capped_dataset(
 # SVM training paths
 # -------------------------
 
+from collections import Counter
+from typing import Any, Callable, Iterable, List, Optional, Sequence
+
+def _ensure_counters(
+    features: Sequence[Any],
+    to_counter_fn: Optional[Callable[[Any], Counter]] = None,
+) -> List[Counter]:
+    """
+    Convert a sequence of feature objects to a list of collections.Counter.
+
+    Behavior:
+    - If an element is already a Counter -> keep as-is.
+    - If to_counter_fn is provided, try it first.
+    - Otherwise try `Counter(feature)` (works for mappings, iterables of tokens, lists).
+    - Fall back to trying common conversion methods (feature.to_counter(), feature.as_counter(), feature.items()).
+    - If conversion fails, raises TypeError describing the failing index/type.
+
+    Returns:
+      List[Counter] with same length and order as `features`.
+    """
+    out: List[Counter] = []
+    for i, f in enumerate(features):
+        # already good
+        if isinstance(f, Counter):
+            out.append(f)
+            continue
+
+        # user-provided converter
+        if to_counter_fn is not None:
+            try:
+                c = to_counter_fn(f)
+                if not isinstance(c, Counter):
+                    c = Counter(c)
+                out.append(c)
+                continue
+            except Exception:
+                # fall through to other attempts
+                pass
+
+        # try direct Counter construction (works for mappings and iterables)
+        try:
+            c = Counter(f)
+            out.append(c)
+            continue
+        except Exception:
+            pass
+
+        # try mapping-like `.items()`
+        try:
+            items = dict(f.items())  # will raise if no .items()
+            out.append(Counter(items))
+            continue
+        except Exception:
+            pass
+
+        # try common custom methods
+        for attr in ("to_counter", "as_counter", "as_dict"):
+            fn = getattr(f, attr, None)
+            if callable(fn):
+                try:
+                    cc = fn()
+                    if not isinstance(cc, Counter):
+                        cc = Counter(cc)
+                    out.append(cc)
+                    break
+                except Exception:
+                    continue
+        else:
+            # no break -> conversion failed
+            raise TypeError(
+                f"Cannot convert feature at index {i} (type {type(f)!r}) to collections.Counter. "
+                "Provide a `to_counter_fn` or pass features in a standard form (Counter, mapping, or iterable of tokens)."
+            )
+
+    return out
+
+
 def train_eval_svm_precomputed(
     features: List[Any],
     y_raw: List[Any],
@@ -397,7 +474,24 @@ def train_eval_svm_precomputed(
     C: float = 1.0,
     class_weight: Optional[str] = None,
     kernel_normalize: bool = True,
+    kernel_fn = None,
 ) -> Dict[str, Any]:
+    """
+    Train / eval using precomputed kernel.
+    Uses compute_kernel_matrix(...) to build K_train (square). Builds K_test manually
+    (test x train) using kernel_fn. Optionally normalizes the kernel (cosine-like).
+    Returns a dict compatible with run_split_sweep_all (keys: acc, f1_macro, timings, ...).
+    """
+
+    from scripts.wp3.wp3_kernel import compute_kernel_matrix
+    if kernel_fn is None:
+        # fallback to the provided kernel function name
+        try:
+            from scripts.wp3.wp3_kernel import kernel_multiset_intersection as km
+            kernel_fn = km
+        except Exception:
+            raise RuntimeError("No kernel_fn provided and kernel_multiset_intersection not importable")
+
     le = LabelEncoder()
     y = le.fit_transform(y_raw)
 
@@ -405,19 +499,51 @@ def train_eval_svm_precomputed(
     tr_idx, te_idx, y_train, y_test = train_test_split(
         idx, y, test_size=test_size, random_state=random_state, stratify=y
     )
-    X_train = [features[i] for i in tr_idx]
-    X_test = [features[i] for i in te_idx]
+
+    # prepare features as Counters once
+    X_counters = _ensure_counters(features)
+    X_train = [X_counters[i] for i in tr_idx]
+    X_test  = [X_counters[i] for i in te_idx]
 
     timings: Dict[str, float] = {}
 
+    # K_train: square matrix for training set
     t0 = time.perf_counter()
-    K_train, _, _ = compute_kernel_matrix(X_train, None, normalize=kernel_normalize)
+    # compute_kernel_matrix expects Counters and returns an NxN matrix
+    K_train = compute_kernel_matrix(X_train, kernel_fn=kernel_fn)
     timings["k_train_time"] = time.perf_counter() - t0
 
+    # compute diagonals for normalization if needed
+    if kernel_normalize:
+        diag_train = np.fromiter((kernel_fn(x, x) for x in X_train), dtype=np.float64, count=len(X_train))
+        diag_test = np.fromiter((kernel_fn(x, x) for x in X_test), dtype=np.float64, count=len(X_test))
+    else:
+        diag_train = None
+        diag_test = None
+
+    # K_test: test x train
     t0 = time.perf_counter()
-    K_test, _, _ = compute_kernel_matrix(X_test, X_train, normalize=kernel_normalize)
+    K_test = np.zeros((len(X_test), len(X_train)), dtype=K_train.dtype)
+    for i, xi in enumerate(X_test):
+        for j, xj in enumerate(X_train):
+            K_test[i, j] = kernel_fn(xi, xj)
     timings["k_test_time"] = time.perf_counter() - t0
 
+    # optional normalization (cosine-like)
+    if kernel_normalize:
+        eps = 1e-12
+        diag_train_clipped = np.clip(diag_train, eps, None)
+        diag_test_clipped = np.clip(diag_test, eps, None)
+
+        # normalize K_train in-place
+        dprod_train = np.sqrt(diag_train_clipped[:, None] * diag_train_clipped[None, :])
+        K_train = (K_train / dprod_train).astype(K_train.dtype, copy=False)
+
+        # normalize K_test
+        dprod_test = np.sqrt(diag_test_clipped[:, None] * diag_train_clipped[None, :])
+        K_test = (K_test / dprod_test).astype(K_test.dtype, copy=False)
+
+    # train SVM (precomputed)
     clf = SVC(kernel="precomputed", C=C, class_weight=class_weight)
     t0 = time.perf_counter()
     clf.fit(K_train, y_train)
@@ -428,8 +554,8 @@ def train_eval_svm_precomputed(
     timings["predict_time"] = time.perf_counter() - t0
     timings["total_time"] = sum(timings.values())
 
-    acc = accuracy_score(y_test, y_pred)
-    f1m = f1_score(y_test, y_pred, average="macro")
+    acc = float(accuracy_score(y_test, y_pred))
+    f1m = float(f1_score(y_test, y_pred, average="macro"))
 
     cm = confusion_matrix(y_test, y_pred)
     report = classification_report(
@@ -1251,11 +1377,28 @@ def plot_split_runtime_area(
             ))
 
     fig.update_layout(
-        title=title,
+        title=dict(
+            text=title,
+            x=0.5,            # zentriert
+            xanchor="center",
+            y=0.98,           # title vertical position (0..1)
+            yanchor="top",
+            font=dict(size=18)
+        ),
         xaxis_title="Test split",
         yaxis_title="Seconds (mean over seeds)",
-        height=600,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=800,          # vergrößere die Figure
+        margin=dict(t=140, b=120, l=80, r=40),  # mehr Platz oben/unten
+        legend=dict(
+            orientation="h",
+            y=-0.16,         # negative setzt die Legende unter die Plotfläche (feinjustieren)
+            x=0.5,
+            xanchor="center",
+            yanchor="top",
+            traceorder="normal",
+            font=dict(size=10),
+            bgcolor="rgba(255,255,255,0.6)",  # optional: halbtransparenter Hintergrund
+        ),
     )
     return fig
 
