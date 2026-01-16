@@ -137,6 +137,65 @@ Two complementary reaction representations were implemented. For ITS–WL, featu
 All feature labels were hashed to enable efficient comparison, and the union over all WL iterations formed the final reaction fingerprint. The resulting feature representations were pre-computed and stored for efficient kernel-based classification in subsequent work packages.
 
 ---
+## WP3 – Kernel-based SVM for Reaction Classification
+
+In WP3, reaction classification is performed using a Support Vector Machine (SVM) with a **precomputed custom kernel**.
+Instead of explicit feature vectors, reactions are compared pairwise using a kernel based on the **multiset intersection of Weisfeiler–Lehman (WL) features**.
+
+Two reaction representations are evaluated:
+- **DRF–WL (Difference Reaction Fingerprint)**, which retains only reaction-specific changes such as bond formation and cleavage.
+- **ITS–WL (Imaginary Transition State)**, which represents the full combined molecular structure of reactants and products.
+
+Experiments are conducted across different settings to ensure a fair and systematic comparison:
+- Kernel comparison between **DRF–WL and ITS–WL**
+- Evaluation of different WL modes (**edge, vertex, shortest-path**)
+- Dataset size sweeps and train/test split variations
+- Controlled subset selection using parameter **k**, enforcing that all subsets share at least *k* common reaction classes
+
+The results show that **DRF–WL consistently achieves equal or higher classification accuracy** compared to ITS–WL across most configurations.
+Increasing *k* reduces the number of available subsets but does not significantly change the relative performance gap between DRF and ITS.
+This indicates that **reaction-focused representations are more discriminative for classification than full structural context** in a kernel-based SVM setting.
+
+Overall, WP3 demonstrates that **custom graph kernels combined with SVMs provide a robust baseline for reaction classification**, and that emphasizing reaction changes over global structure leads to more stable and interpretable results.
+
+---
+## WP4 – Alternative Learning Strategies and Kernels
+
+All additional analyses, visualizations, and exploratory ideas are documented in the **presentation notebook**, which contains the complete discussion of alternative strategies and kernel behavior.
+
+### Alternative learning strategies and kernels
+
+- **Kernel-based SVM with precomputed kernels**
+  - A custom kernel based on **multiset intersection of WL features** was used instead of explicit feature vectors.
+  - This allows direct comparison of reactions based on structural similarity rather than learned embeddings.
+
+- **DRF–WL vs. ITS–WL representations**
+  - DRF–WL focuses exclusively on reaction-specific changes.
+  - ITS–WL includes full molecular context.
+  - The comparison itself serves as an alternative modeling strategy: *reaction-centered vs. structure-centered learning*.
+
+- **Multiple WL feature modes**
+  - Edge, vertex, and shortest-path (SP) WL variants were evaluated.
+  - This explores how different structural granularities affect kernel similarity and classification.
+
+- **Subset-controlled evaluation using parameter k**
+  - Subsets were constructed to share at least *k* common reaction classes.
+  - This strategy ensures fair comparisons and tests robustness against dataset similarity.
+
+- **Exploratory kernel analysis (non-learning)**
+  - Kernel matrix heatmaps, sparsity analysis, and value distributions were used to interpret kernel behavior.
+  - These analyses provide insight into why certain representations perform better, beyond pure accuracy.
+
+### Proposed future alternatives
+
+- Replace the SVM with **kernel ridge regression** or **Gaussian processes** using the same precomputed kernels.
+- Combine DRF and ITS kernels via **kernel fusion** (e.g. weighted sum).
+- Use learned embeddings (e.g. GNNs) as input to a kernel method for hybrid approaches.
+
+Overall, WP4 emphasizes **interpretability and controlled experimentation** over purely end-to-end learning, complementing the SVM results from WP3.
+
+---
+
 ## Lessons Learned
 
 ### Feature Design and Representation
@@ -160,3 +219,6 @@ Additional insights gained during extended experimentation and classification ex
 This repository covers WP0 (setup and familiarization).
 
 ---
+## Authors 
+- **Olga Pokrovskaja**
+- **Patricia Bombik**
